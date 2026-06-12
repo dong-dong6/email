@@ -1,0 +1,36 @@
+# OS/editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Secrets
+.env
+.env.*
+!.env.example
+secrets/
+
+# Go
+backend/bin/
+backend/coverage.out
+backend/data/
+.gocache/
+.gomodcache/
+
+# Flutter/Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+client/.dart_tool/
+client/build/
+client/.plugin_symlinks/
+client/.pub-cache/
+client/coverage/
+
+# Logs/runtime
+*.log
+tmp/
+data/
+dist/

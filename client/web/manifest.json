@@ -1,0 +1,9 @@
+{
+  "name": "Self-hosted Mail",
+  "short_name": "Mail",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#f7fbfa",
+  "theme_color": "#25636f",
+  "description": "Self-hosted cross-platform email client"
+}

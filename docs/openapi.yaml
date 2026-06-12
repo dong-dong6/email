@@ -1,0 +1,137 @@
+openapi: 3.1.0
+info:
+  title: Self-hosted Mail API
+  version: 0.1.0
+servers:
+  - url: /api/v1
+security:
+  - bearerAuth: []
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+paths:
+  /auth/login:
+    post:
+      security: []
+      summary: Owner login
+      responses:
+        "200":
+          description: Token pair
+  /auth/refresh:
+    post:
+      security: []
+      summary: Rotate refresh token
+      responses:
+        "200":
+          description: Token pair
+  /snapshot:
+    get:
+      summary: Initial mailbox bootstrap for clients
+      responses:
+        "200":
+          description: Accounts, folders, messages, drafts, rules and settings
+  /accounts:
+    get:
+      summary: List connected accounts
+      responses:
+        "200":
+          description: Account list
+    post:
+      summary: Create an account connector record
+      responses:
+        "201":
+          description: Account
+  /accounts/{id}/sync:
+    post:
+      summary: Trigger provider sync
+      responses:
+        "202":
+          description: Sync accepted
+  /folders:
+    get:
+      summary: List folders, optionally filtered by account_id
+      responses:
+        "200":
+          description: Folder list
+  /messages:
+    get:
+      summary: List messages
+      responses:
+        "200":
+          description: Message list
+  /messages/{id}:
+    get:
+      summary: Get message
+      responses:
+        "200":
+          description: Message
+    patch:
+      summary: Mark read/starred
+      responses:
+        "200":
+          description: Updated message
+    delete:
+      summary: Delete message
+      responses:
+        "204":
+          description: Deleted
+  /messages/{id}/move:
+    post:
+      summary: Move message to folder
+      responses:
+        "200":
+          description: Moved message
+  /drafts:
+    get:
+      summary: List drafts
+      responses:
+        "200":
+          description: Draft list
+    post:
+      summary: Create draft
+      responses:
+        "201":
+          description: Draft
+  /send:
+    post:
+      summary: Queue outgoing message
+      responses:
+        "202":
+          description: Outbox item
+  /search:
+    get:
+      summary: Search messages
+      responses:
+        "200":
+          description: Message list
+  /rules:
+    get:
+      summary: List rules
+      responses:
+        "200":
+          description: Rule list
+    post:
+      summary: Create rule
+      responses:
+        "201":
+          description: Rule
+  /settings:
+    get:
+      summary: Read settings
+      responses:
+        "200":
+          description: Settings
+    put:
+      summary: Update settings
+      responses:
+        "200":
+          description: Settings
+  /events:
+    get:
+      summary: Server-sent events stream
+      description: Browser EventSource may pass token query parameter.
+      responses:
+        "200":
+          description: text/event-stream

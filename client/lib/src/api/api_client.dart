@@ -5,13 +5,21 @@ import 'http_transport.dart';
 
 class ApiClient {
   ApiClient(String baseUrl)
-      : _base = Uri.parse(baseUrl),
+      : _base = _parseBaseUrl(baseUrl),
         _transport = createTransport();
 
-  final Uri _base;
+  Uri _base;
   final HttpTransport _transport;
   String? _accessToken;
   bool offlineMode = false;
+
+  String get baseUrl => _base.toString().replaceFirst(RegExp(r'/$'), '');
+
+  void setBaseUrl(String value) {
+    _base = _parseBaseUrl(value);
+    _accessToken = null;
+    offlineMode = false;
+  }
 
   Future<void> login(String email, String password, {String totp = ''}) async {
     try {
@@ -105,6 +113,21 @@ class ApiClient {
     }
     return (jsonDecode(response.body) as Map).cast<String, dynamic>();
   }
+}
+
+Uri _parseBaseUrl(String value) {
+  var normalized = value.trim();
+  if (normalized.isEmpty) {
+    normalized = 'http://localhost:8080';
+  }
+  if (!normalized.startsWith('http://') && !normalized.startsWith('https://')) {
+    normalized = 'https://$normalized';
+  }
+  final uri = Uri.parse(normalized);
+  if (!uri.hasScheme || uri.host.isEmpty) {
+    throw FormatException('服务地址无效: $value');
+  }
+  return uri;
 }
 
 class ApiException implements Exception {

@@ -9,5 +9,11 @@
 *.md text eol=lf
 *.sql text eol=lf
 *.sh text eol=lf
+*.cmake text eol=lf
+*.cpp text eol=lf
+*.cc text eol=lf
+*.h text eol=lf
+*.rc text eol=lf
+CMakeLists.txt text eol=lf
 Dockerfile text eol=lf
 Caddyfile text eol=lf

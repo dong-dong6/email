@@ -20,6 +20,7 @@ class AppState extends ChangeNotifier {
   List<MailFolder> get folders => snapshot?.folders ?? const [];
   List<MailMessage> get messages => snapshot?.messages ?? const [];
   bool get offlineMode => api.offlineMode;
+  String get apiBaseUrl => api.baseUrl;
 
   MailFolder? get selectedFolder {
     final id = selectedFolderId;
@@ -51,8 +52,14 @@ class AppState extends ChangeNotifier {
     }).toList();
   }
 
-  Future<void> login(String email, String password, String totp) async {
+  Future<void> login(
+    String apiBaseUrl,
+    String email,
+    String password,
+    String totp,
+  ) async {
     await _run(() async {
+      api.setBaseUrl(apiBaseUrl);
       await api.login(email, password, totp: totp);
       isAuthenticated = true;
       snapshot = await api.snapshot();

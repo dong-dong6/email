@@ -12,12 +12,20 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
+  late final TextEditingController _server;
   final _email = TextEditingController(text: 'owner@example.com');
   final _password = TextEditingController(text: 'change-me-now');
   final _totp = TextEditingController();
 
   @override
+  void initState() {
+    super.initState();
+    _server = TextEditingController(text: widget.state.apiBaseUrl);
+  }
+
+  @override
   void dispose() {
+    _server.dispose();
     _email.dispose();
     _password.dispose();
     _totp.dispose();
@@ -30,10 +38,10 @@ class _LoginScreenState extends State<LoginScreen> {
     return Scaffold(
       body: SafeArea(
         child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 420),
-            child: Padding(
-              padding: const EdgeInsets.all(24),
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 420),
               child: AutofillGroup(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
@@ -50,6 +58,15 @@ class _LoginScreenState extends State<LoginScreen> {
                         textAlign: TextAlign.center,
                         style: TextStyle(color: scheme.onSurfaceVariant)),
                     const SizedBox(height: 28),
+                    TextField(
+                      controller: _server,
+                      keyboardType: TextInputType.url,
+                      decoration: const InputDecoration(
+                          prefixIcon: Icon(Icons.dns_outlined),
+                          labelText: '服务地址',
+                          hintText: 'https://mail.example.com'),
+                    ),
+                    const SizedBox(height: 12),
                     TextField(
                       controller: _email,
                       autofillHints: const [AutofillHints.username],
@@ -102,6 +119,11 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   void _submit() {
-    widget.state.login(_email.text.trim(), _password.text, _totp.text.trim());
+    widget.state.login(
+      _server.text.trim(),
+      _email.text.trim(),
+      _password.text,
+      _totp.text.trim(),
+    );
   }
 }

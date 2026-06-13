@@ -44,3 +44,18 @@ BACKUP_DIR=./backups scripts/backup.sh
 客户端登录页的“服务地址”填写 `PUBLIC_URL` 对应的地址，不要加 `/api/v1`。
 
 当前版本后端默认使用内存仓库演示数据；PostgreSQL 表和部署服务已准备好，生产持久化接入应优先实现 `store.Postgres`。
+
+## 常见问题
+
+如果日志出现：
+
+```text
+mkdir /data/blobs: permission denied
+```
+
+说明旧容器创建过的 Docker volume 属主不是应用用户。拉取新代码后重新构建即可，镜像入口会在启动时修正 `/data` 权限：
+
+```bash
+git pull
+docker compose up -d --build
+```

@@ -45,17 +45,11 @@ BACKUP_DIR=./backups scripts/backup.sh
 
 当前版本后端默认使用内存仓库演示数据；PostgreSQL 表和部署服务已准备好，生产持久化接入应优先实现 `store.Postgres`。
 
-## 常见问题
+## 重新部署
 
-如果日志出现：
-
-```text
-mkdir /data/blobs: permission denied
-```
-
-说明旧容器创建过的 Docker volume 属主不是应用用户。拉取新代码后重新构建即可，镜像入口会在启动时修正 `/data` 权限：
+项目不保留旧部署兼容。服务结构变化后，直接清理旧容器、孤儿服务和旧 volume，再重新启动：
 
 ```bash
-git pull
+docker compose down --remove-orphans -v
 docker compose up -d --build
 ```

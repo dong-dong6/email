@@ -14,7 +14,7 @@ cp .env.example .env
 - `MASTER_KEY_BASE64` 设置为 32 字节 base64 密钥。
 - `OWNER_EMAIL`、`OWNER_PASSWORD` 改为自己的登录信息。
 - `POSTGRES_PASSWORD` 改为强密码。
-- 按需填写 Gmail、Microsoft OAuth 配置。
+- Gmail/Outlook 账号当前在客户端用 IMAP/SMTP 与应用专用密码添加，不需要在 `.env` 填 OAuth 配置。
 
 默认启动为 Go 后端直接提供 HTTP：
 
@@ -43,7 +43,7 @@ BACKUP_DIR=./backups scripts/backup.sh
 
 客户端登录页的“服务地址”填写 `PUBLIC_URL` 对应的地址，不要加 `/api/v1`。
 
-当前版本后端默认使用内存仓库演示数据；PostgreSQL 表和部署服务已准备好，生产持久化接入应优先实现 `store.Postgres`。
+当前版本后端使用内存仓库保存账号和邮件缓存；PostgreSQL 表和部署服务已准备好，生产持久化接入应优先实现 `store.Postgres`。
 
 ## 重新部署
 

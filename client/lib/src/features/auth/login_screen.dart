@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../app/app_state.dart';
+import '../../services/server_cache.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key, required this.state});
@@ -13,14 +14,33 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen> {
   late final TextEditingController _server;
-  final _email = TextEditingController(text: 'owner@example.com');
-  final _password = TextEditingController(text: 'change-me-now');
+  final _email = TextEditingController();
+  final _password = TextEditingController();
+  final _confirmPassword = TextEditingController();
   final _totp = TextEditingController();
+  final _cacheService = ServerCacheService();
+  List<ServerConfig> _savedServers = [];
+  bool _isRegistering = false;
+  bool _checkingServer = false;
 
   @override
   void initState() {
     super.initState();
     _server = TextEditingController(text: widget.state.apiBaseUrl);
+    _loadSavedServers();
+  }
+
+  Future<void> _loadSavedServers() async {
+    final servers = await _cacheService.loadServers();
+    final lastUrl = await _cacheService.getLastServerUrl();
+    if (mounted) {
+      setState(() {
+        _savedServers = servers;
+        if (lastUrl != null && lastUrl.isNotEmpty) {
+          _server.text = lastUrl;
+        }
+      });
+    }
   }
 
   @override
@@ -28,8 +48,63 @@ class _LoginScreenState extends State<LoginScreen> {
     _server.dispose();
     _email.dispose();
     _password.dispose();
+    _confirmPassword.dispose();
     _totp.dispose();
     super.dispose();
+  }
+
+  Future<void> _onServerChanged(String value) async {
+    final url = value.trim();
+    if (url.isEmpty) return;
+
+    setState(() => _checkingServer = true);
+    await widget.state.checkServer(url);
+    if (mounted) {
+      setState(() {
+        _checkingServer = false;
+        _isRegistering = widget.state.needsRegistration;
+      });
+    }
+  }
+
+  Future<void> _submit() async {
+    final serverUrl = _server.text.trim();
+    if (serverUrl.isEmpty) return;
+
+    if (_isRegistering) {
+      if (_password.text != _confirmPassword.text) {
+        setState(() {
+          widget.state.error = '密码不匹配';
+        });
+        return;
+      }
+      if (_password.text.length < 8) {
+        setState(() {
+          widget.state.error = '密码至少需要8个字符';
+        });
+        return;
+      }
+      await widget.state.register(
+        serverUrl,
+        _email.text.trim(),
+        _password.text,
+      );
+    } else {
+      await widget.state.login(
+        serverUrl,
+        _email.text.trim(),
+        _password.text,
+        _totp.text.trim(),
+      );
+    }
+
+    if (widget.state.isAuthenticated) {
+      await _cacheService.saveServer(ServerConfig(
+        url: serverUrl,
+        email: _email.text.trim(),
+        lastLogin: DateTime.now(),
+      ));
+    }
   }
 
   @override
@@ -54,18 +129,17 @@ class _LoginScreenState extends State<LoginScreen> {
                         textAlign: TextAlign.center,
                         style: Theme.of(context).textTheme.headlineSmall),
                     const SizedBox(height: 8),
-                    Text('连接你的 VPS 邮箱后端',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(color: scheme.onSurfaceVariant)),
-                    const SizedBox(height: 28),
-                    TextField(
-                      controller: _server,
-                      keyboardType: TextInputType.url,
-                      decoration: const InputDecoration(
-                          prefixIcon: Icon(Icons.dns_outlined),
-                          labelText: '服务地址',
-                          hintText: 'https://mail.example.com'),
+                    Text(
+                      _isRegistering ? '创建管理员账户' : '连接你的 VPS 邮箱后端',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: scheme.onSurfaceVariant),
                     ),
+                    const SizedBox(height: 28),
+                    _buildServerField(),
+                    if (_savedServers.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      _buildSavedServers(),
+                    ],
                     const SizedBox(height: 12),
                     TextField(
                       controller: _email,
@@ -84,24 +158,40 @@ class _LoginScreenState extends State<LoginScreen> {
                           labelText: '密码'),
                       onSubmitted: (_) => _submit(),
                     ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: _totp,
-                      keyboardType: TextInputType.number,
-                      decoration: const InputDecoration(
-                          prefixIcon: Icon(Icons.pin_outlined),
-                          labelText: 'TOTP，可选'),
-                      onSubmitted: (_) => _submit(),
-                    ),
+                    if (_isRegistering) ...[
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: _confirmPassword,
+                        obscureText: true,
+                        decoration: const InputDecoration(
+                            prefixIcon: Icon(Icons.lock_outline),
+                            labelText: '确认密码'),
+                        onSubmitted: (_) => _submit(),
+                      ),
+                    ],
+                    if (!_isRegistering) ...[
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: _totp,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(
+                            prefixIcon: Icon(Icons.pin_outlined),
+                            labelText: 'TOTP，可选'),
+                        onSubmitted: (_) => _submit(),
+                      ),
+                    ],
                     const SizedBox(height: 20),
                     FilledButton.icon(
                       onPressed: widget.state.isLoading ? null : _submit,
                       icon: widget.state.isLoading
                           ? const SizedBox.square(
                               dimension: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2))
-                          : const Icon(Icons.login_rounded),
-                      label: const Text('登录'),
+                              child:
+                                  CircularProgressIndicator(strokeWidth: 2))
+                          : Icon(_isRegistering
+                              ? Icons.person_add
+                              : Icons.login_rounded),
+                      label: Text(_isRegistering ? '注册' : '登录'),
                     ),
                     if (widget.state.error != null) ...[
                       const SizedBox(height: 12),
@@ -118,12 +208,48 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
-  void _submit() {
-    widget.state.login(
-      _server.text.trim(),
-      _email.text.trim(),
-      _password.text,
-      _totp.text.trim(),
+  Widget _buildServerField() {
+    return TextField(
+      controller: _server,
+      keyboardType: TextInputType.url,
+      decoration: InputDecoration(
+        prefixIcon: const Icon(Icons.dns_outlined),
+        labelText: '服务地址',
+        hintText: 'https://mail.example.com',
+        suffixIcon: _checkingServer
+            ? const SizedBox(
+                width: 20,
+                height: 20,
+                child: Padding(
+                  padding: EdgeInsets.all(12),
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              )
+            : null,
+      ),
+      onSubmitted: (_) => _onServerChanged(_server.text),
+    );
+  }
+
+  Widget _buildSavedServers() {
+    return Wrap(
+      spacing: 8,
+      children: _savedServers.map((server) {
+        return ActionChip(
+          avatar: const Icon(Icons.history, size: 18),
+          label: Text(
+            Uri.tryParse(server.url)?.host ?? server.url,
+            overflow: TextOverflow.ellipsis,
+          ),
+          onPressed: () {
+            _server.text = server.url;
+            if (server.email.isNotEmpty) {
+              _email.text = server.email;
+            }
+            _onServerChanged(server.url);
+          },
+        );
+      }).toList(),
     );
   }
 }

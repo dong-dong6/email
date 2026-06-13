@@ -39,6 +39,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/healthz", s.health)
 	mux.HandleFunc("/api/v1/auth/login", s.login)
 	mux.HandleFunc("/api/v1/auth/refresh", s.refresh)
+	mux.HandleFunc("/api/v1/auth/register", s.register)
+	mux.HandleFunc("/api/v1/auth/check", s.checkUsers)
 	mux.HandleFunc("/api/v1/events", s.events)
 	mux.HandleFunc("/api/v1/webhooks/gmail", s.webhook("gmail"))
 	mux.HandleFunc("/api/v1/webhooks/outlook", s.webhook("outlook"))
@@ -107,6 +109,44 @@ func (s *Server) refresh(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, pair)
 }
 
+func (s *Server) register(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w)
+		return
+	}
+	var req struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if req.Email == "" || req.Password == "" {
+		writeError(w, http.StatusBadRequest, errors.New("email and password are required"))
+		return
+	}
+	if len(req.Password) < 8 {
+		writeError(w, http.StatusBadRequest, errors.New("password must be at least 8 characters"))
+		return
+	}
+	id, err := s.auth.Register(req.Email, req.Password)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]string{"id": id, "email": req.Email})
+}
+
+func (s *Server) checkUsers(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	hasUsers := s.auth.HasUsers()
+	writeJSON(w, http.StatusOK, map[string]bool{"has_users": hasUsers})
+}
+
 func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		methodNotAllowed(w)
@@ -124,6 +164,14 @@ func (s *Server) accounts(w http.ResponseWriter, r *http.Request) {
 			Provider    model.Provider `json:"provider"`
 			Email       string         `json:"email"`
 			DisplayName string         `json:"display_name"`
+			Username    string         `json:"username"`
+			Password    string         `json:"password"`
+			IMAPHost    string         `json:"imap_host"`
+			IMAPPort    int            `json:"imap_port"`
+			IMAPTLS     bool           `json:"imap_tls"`
+			SMTPHost    string         `json:"smtp_host"`
+			SMTPPort    int            `json:"smtp_port"`
+			SMTPTLS     bool           `json:"smtp_tls"`
 		}
 		if err := readJSON(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -135,8 +183,46 @@ func (s *Server) accounts(w http.ResponseWriter, r *http.Request) {
 		if req.DisplayName == "" {
 			req.DisplayName = req.Email
 		}
-		account := s.db.CreateAccount(req.Provider, req.Email, req.DisplayName)
+		account, err := mail.NormalizeAccount(model.Account{
+			Provider:    req.Provider,
+			Email:       req.Email,
+			DisplayName: req.DisplayName,
+			Username:    req.Username,
+			Password:    req.Password,
+			IMAPHost:    req.IMAPHost,
+			IMAPPort:    req.IMAPPort,
+			IMAPTLS:     req.IMAPTLS,
+			SMTPHost:    req.SMTPHost,
+			SMTPPort:    req.SMTPPort,
+			SMTPTLS:     req.SMTPTLS,
+		})
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		account = s.db.CreateAccount(account)
 		s.broker.Publish(model.Event{Type: "account.created", AccountID: account.ID, Payload: account})
+		if account.Provider != model.ProviderMock {
+			connector, ok := s.registry.For(account.Provider)
+			if !ok {
+				writeError(w, http.StatusBadRequest, errors.New("connector not found"))
+				return
+			}
+			account.Status = model.AccountSyncing
+			s.db.UpdateAccount(account)
+			go func() {
+				if err := connector.Sync(context.Background(), account); err != nil {
+					account.Status = model.AccountError
+					account.LastError = err.Error()
+				} else {
+					account.Status = model.AccountActive
+					account.LastError = ""
+					account.SyncCursor = strconv.FormatInt(time.Now().UnixNano(), 10)
+				}
+				s.db.UpdateAccount(account)
+				s.broker.Publish(model.Event{Type: "account.synced", AccountID: account.ID, Payload: account})
+			}()
+		}
 		writeJSON(w, http.StatusCreated, account)
 	default:
 		methodNotAllowed(w)
@@ -182,6 +268,10 @@ func (s *Server) syncAccount(w http.ResponseWriter, r *http.Request, accountID s
 		writeError(w, http.StatusNotFound, store.ErrNotFound)
 		return
 	}
+	if account.Status == model.AccountSyncing {
+		writeJSON(w, http.StatusAccepted, account)
+		return
+	}
 	connector, ok := s.registry.For(account.Provider)
 	if !ok {
 		writeError(w, http.StatusBadRequest, errors.New("connector not found"))
@@ -189,17 +279,18 @@ func (s *Server) syncAccount(w http.ResponseWriter, r *http.Request, accountID s
 	}
 	account.Status = model.AccountSyncing
 	s.db.UpdateAccount(account)
-	if err := connector.Sync(r.Context(), account); err != nil {
-		account.Status = model.AccountError
-		account.LastError = err.Error()
+	go func() {
+		if err := connector.Sync(context.Background(), account); err != nil {
+			account.Status = model.AccountError
+			account.LastError = err.Error()
+		} else {
+			account.Status = model.AccountActive
+			account.LastError = ""
+			account.SyncCursor = strconv.FormatInt(time.Now().UnixNano(), 10)
+		}
 		s.db.UpdateAccount(account)
-		writeError(w, http.StatusBadGateway, err)
-		return
-	}
-	account.Status = model.AccountActive
-	account.LastError = ""
-	account.SyncCursor = strconv.FormatInt(time.Now().UnixNano(), 10)
-	s.db.UpdateAccount(account)
+		s.broker.Publish(model.Event{Type: "account.synced", AccountID: account.ID, Payload: account})
+	}()
 	writeJSON(w, http.StatusAccepted, account)
 }
 

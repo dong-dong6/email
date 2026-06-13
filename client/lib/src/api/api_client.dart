@@ -46,19 +46,22 @@ class ApiClient {
     if (offlineMode) {
       return MailboxSnapshot.demo();
     }
-    try {
-      final response = await _json('GET', '/api/v1/snapshot');
-      return MailboxSnapshot.fromJson(response);
-    } catch (_) {
-      offlineMode = true;
-      return MailboxSnapshot.demo();
-    }
+    final response = await _json('GET', '/api/v1/snapshot');
+    return MailboxSnapshot.fromJson(response);
   }
 
   Future<MailAccount> createAccount({
     required String provider,
     required String email,
     required String displayName,
+    required String username,
+    required String password,
+    required String imapHost,
+    required int imapPort,
+    required bool imapTls,
+    required String smtpHost,
+    required int smtpPort,
+    required bool smtpTls,
   }) async {
     if (offlineMode) {
       return MailAccount(
@@ -73,6 +76,14 @@ class ApiClient {
       'provider': provider,
       'email': email,
       'display_name': displayName,
+      'username': username,
+      'password': password,
+      'imap_host': imapHost,
+      'imap_port': imapPort,
+      'imap_tls': imapTls,
+      'smtp_host': smtpHost,
+      'smtp_port': smtpPort,
+      'smtp_tls': smtpTls,
     });
     return MailAccount.fromJson(response);
   }
@@ -109,6 +120,20 @@ class ApiClient {
       return;
     }
     await _json('POST', '/api/v1/accounts/$accountId/sync');
+  }
+
+  Future<bool> checkUsers() async {
+    try {
+      final response = await _json('GET', '/api/v1/auth/check', auth: false);
+      return response['has_users'] as bool? ?? true;
+    } catch (_) {
+      return true;
+    }
+  }
+
+  Future<void> register(String email, String password) async {
+    await _json('POST', '/api/v1/auth/register',
+        body: {'email': email, 'password': password}, auth: false);
   }
 
   Future<Map<String, dynamic>> _json(

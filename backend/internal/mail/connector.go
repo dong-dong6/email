@@ -3,7 +3,6 @@ package mail
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/mail"
 	"strings"
 	"time"
@@ -27,36 +26,15 @@ type Registry struct {
 func NewRegistry(db *store.Memory, broker *events.Broker) *Registry {
 	return &Registry{connectors: map[model.Provider]Connector{
 		model.ProviderMock:    MockConnector{db: db, broker: broker},
-		model.ProviderGmail:   StaticConnector{provider: model.ProviderGmail, name: "Gmail API"},
-		model.ProviderOutlook: StaticConnector{provider: model.ProviderOutlook, name: "Microsoft Graph Mail"},
-		model.ProviderIMAP:    StaticConnector{provider: model.ProviderIMAP, name: "IMAP/SMTP"},
+		model.ProviderGmail:   IMAPSMTPConnector{provider: model.ProviderGmail, db: db, broker: broker},
+		model.ProviderOutlook: IMAPSMTPConnector{provider: model.ProviderOutlook, db: db, broker: broker},
+		model.ProviderIMAP:    IMAPSMTPConnector{provider: model.ProviderIMAP, db: db, broker: broker},
 	}}
 }
 
 func (r *Registry) For(provider model.Provider) (Connector, bool) {
 	connector, ok := r.connectors[provider]
 	return connector, ok
-}
-
-type StaticConnector struct {
-	provider model.Provider
-	name     string
-}
-
-func (s StaticConnector) Provider() model.Provider {
-	return s.provider
-}
-
-func (s StaticConnector) AuthorizeURL(state string) (string, error) {
-	return "", fmt.Errorf("%s connector credentials are not configured yet", s.name)
-}
-
-func (s StaticConnector) Sync(ctx context.Context, account model.Account) error {
-	return fmt.Errorf("%s sync is waiting for provider credentials", s.name)
-}
-
-func (s StaticConnector) Send(ctx context.Context, account model.Account, req model.SendRequest) (string, error) {
-	return "", fmt.Errorf("%s send is waiting for provider credentials", s.name)
 }
 
 type MockConnector struct {

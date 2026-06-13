@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -38,14 +39,35 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	db := store.NewMemory()
-	db.SeedDemo(blobStore)
-	broker := events.NewBroker()
-	authSvc := auth.NewService(cfg)
-	registry := mail.NewRegistry(db, broker)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	db, err := store.NewMemoryWithKey(cfg.MasterKey)
+	if err != nil {
+		return fmt.Errorf("init memory store: %w", err)
+	}
+	db.SeedDemo(blobStore)
+
+	var userStore auth.UserStore
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL != "" {
+		pgStore, err := store.NewPostgres(ctx, databaseURL)
+		if err != nil {
+			slog.Warn("failed to connect to postgres, using config-based auth", "error", err)
+		} else {
+			defer pgStore.Close()
+			if err := pgStore.SeedDemo(ctx); err != nil {
+				slog.Warn("failed to seed demo data", "error", err)
+			}
+			userStore = store.NewUserStoreAdapter(pgStore)
+			slog.Info("PostgreSQL connected for user management")
+		}
+	}
+
+	broker := events.NewBroker()
+	authSvc := auth.NewService(cfg, userStore)
+	registry := mail.NewRegistry(db, broker)
 	mail.NewOutboxWorker(db, registry, broker).Start(ctx)
 
 	api := httpapi.NewServer(cfg, authSvc, db, blobStore, registry, broker)

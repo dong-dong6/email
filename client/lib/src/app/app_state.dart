@@ -10,6 +10,7 @@ class AppState extends ChangeNotifier {
 
   bool isAuthenticated = false;
   bool isLoading = false;
+  bool needsRegistration = false;
   String? error;
   MailboxSnapshot? snapshot;
   String? selectedFolderId;
@@ -62,6 +63,32 @@ class AppState extends ChangeNotifier {
       api.setBaseUrl(apiBaseUrl);
       await api.login(email, password, totp: totp);
       isAuthenticated = true;
+      needsRegistration = false;
+      snapshot = await api.snapshot();
+      selectedFolderId = folders.firstOrNull?.id;
+      selectedMessageId = visibleMessages.firstOrNull?.id;
+    });
+  }
+
+  Future<void> checkServer(String apiBaseUrl) async {
+    await _run(() async {
+      api.setBaseUrl(apiBaseUrl);
+      final hasUsers = await api.checkUsers();
+      needsRegistration = !hasUsers;
+    });
+  }
+
+  Future<void> register(
+    String apiBaseUrl,
+    String email,
+    String password,
+  ) async {
+    await _run(() async {
+      api.setBaseUrl(apiBaseUrl);
+      await api.register(email, password);
+      await api.login(email, password);
+      isAuthenticated = true;
+      needsRegistration = false;
       snapshot = await api.snapshot();
       selectedFolderId = folders.firstOrNull?.id;
       selectedMessageId = visibleMessages.firstOrNull?.id;
@@ -80,12 +107,28 @@ class AppState extends ChangeNotifier {
     required String provider,
     required String email,
     required String displayName,
+    required String username,
+    required String password,
+    required String imapHost,
+    required int imapPort,
+    required bool imapTls,
+    required String smtpHost,
+    required int smtpPort,
+    required bool smtpTls,
   }) async {
     await _run(() async {
       final account = await api.createAccount(
         provider: provider,
         email: email,
         displayName: displayName.isEmpty ? email : displayName,
+        username: username.isEmpty ? email : username,
+        password: password,
+        imapHost: imapHost,
+        imapPort: imapPort,
+        imapTls: imapTls,
+        smtpHost: smtpHost,
+        smtpPort: smtpPort,
+        smtpTls: smtpTls,
       );
       if (api.offlineMode) {
         final current = snapshot ?? MailboxSnapshot.demo();
@@ -157,7 +200,11 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> syncSelectedAccount() async {
-    final account = accounts.firstOrNull;
+    final selectedAccountId = selectedFolder?.accountId;
+    final account = accounts
+            .where((account) => account.id == selectedAccountId)
+            .firstOrNull ??
+        accounts.firstOrNull;
     if (account == null) {
       return;
     }

@@ -23,6 +23,7 @@ class MailAccount {
     required this.email,
     required this.displayName,
     required this.status,
+    this.lastError = '',
   });
 
   final String id;
@@ -30,6 +31,7 @@ class MailAccount {
   final String email;
   final String displayName;
   final String status;
+  final String lastError;
 
   factory MailAccount.fromJson(Map<String, dynamic> json) {
     return MailAccount(
@@ -38,6 +40,7 @@ class MailAccount {
       email: json['email'] as String? ?? '',
       displayName: json['display_name'] as String? ?? '',
       status: json['status'] as String? ?? 'active',
+      lastError: json['last_error'] as String? ?? '',
     );
   }
 }

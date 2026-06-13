@@ -31,6 +31,14 @@ type Account struct {
 	Provider    Provider      `json:"provider"`
 	Email       string        `json:"email"`
 	DisplayName string        `json:"display_name"`
+	Username    string        `json:"username,omitempty"`
+	Password    string        `json:"-"`
+	IMAPHost    string        `json:"imap_host,omitempty"`
+	IMAPPort    int           `json:"imap_port,omitempty"`
+	IMAPTLS     bool          `json:"imap_tls"`
+	SMTPHost    string        `json:"smtp_host,omitempty"`
+	SMTPPort    int           `json:"smtp_port,omitempty"`
+	SMTPTLS     bool          `json:"smtp_tls"`
 	Status      AccountStatus `json:"status"`
 	SyncCursor  string        `json:"sync_cursor"`
 	LastError   string        `json:"last_error,omitempty"`

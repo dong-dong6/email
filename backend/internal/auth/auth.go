@@ -20,6 +20,12 @@ import (
 	"email/backend/internal/config"
 )
 
+type UserStore interface {
+	GetUserByEmail(email string) (id, passwordHash, role string, err error)
+	HasUsers() (bool, error)
+	CreateUser(email, passwordHash, role string) (string, error)
+}
+
 type Service struct {
 	email        string
 	password     string
@@ -30,6 +36,7 @@ type Service struct {
 	refreshTTL   time.Duration
 	mu           sync.Mutex
 	refresh      map[string]time.Time
+	userStore    UserStore
 }
 
 type TokenPair struct {
@@ -46,7 +53,7 @@ type Claims struct {
 	ID      string `json:"jti"`
 }
 
-func NewService(cfg config.Config) *Service {
+func NewService(cfg config.Config, userStore UserStore) *Service {
 	return &Service{
 		email:        strings.ToLower(cfg.OwnerEmail),
 		password:     cfg.OwnerPassword,
@@ -56,11 +63,23 @@ func NewService(cfg config.Config) *Service {
 		accessTTL:    cfg.AccessTTL,
 		refreshTTL:   cfg.RefreshTTL,
 		refresh:      make(map[string]time.Time),
+		userStore:    userStore,
 	}
 }
 
 func (s *Service) Login(email, password, totp string) (TokenPair, error) {
-	if strings.ToLower(strings.TrimSpace(email)) != s.email {
+	email = strings.ToLower(strings.TrimSpace(email))
+	if s.userStore != nil {
+		_, passwordHash, role, err := s.userStore.GetUserByEmail(email)
+		if err != nil {
+			return TokenPair{}, errors.New("invalid credentials")
+		}
+		if !VerifyPassword(password, passwordHash) {
+			return TokenPair{}, errors.New("invalid credentials")
+		}
+		return s.issuePairForUser(email, role)
+	}
+	if email != s.email {
 		return TokenPair{}, errors.New("invalid credentials")
 	}
 	if !s.verifyPassword(password) {
@@ -115,17 +134,21 @@ func (s *Service) Verify(token, tokenType string) (Claims, error) {
 }
 
 func (s *Service) issuePair() (TokenPair, error) {
+	return s.issuePairForUser(s.email, "admin")
+}
+
+func (s *Service) issuePairForUser(email, role string) (TokenPair, error) {
 	now := time.Now()
 	accessID := randomID("atk")
 	refreshID := randomID("rtk")
 	accessExpiry := now.Add(s.accessTTL)
 	refreshExpiry := now.Add(s.refreshTTL)
 
-	access, err := s.signClaims(Claims{Subject: "owner", Email: s.email, Type: "access", Expiry: accessExpiry.Unix(), ID: accessID})
+	access, err := s.signClaims(Claims{Subject: role, Email: email, Type: "access", Expiry: accessExpiry.Unix(), ID: accessID})
 	if err != nil {
 		return TokenPair{}, err
 	}
-	refresh, err := s.signClaims(Claims{Subject: "owner", Email: s.email, Type: "refresh", Expiry: refreshExpiry.Unix(), ID: refreshID})
+	refresh, err := s.signClaims(Claims{Subject: role, Email: email, Type: "refresh", Expiry: refreshExpiry.Unix(), ID: refreshID})
 	if err != nil {
 		return TokenPair{}, err
 	}
@@ -133,6 +156,35 @@ func (s *Service) issuePair() (TokenPair, error) {
 	s.refresh[refreshID] = refreshExpiry
 	s.mu.Unlock()
 	return TokenPair{AccessToken: access, RefreshToken: refresh, ExpiresAt: accessExpiry}, nil
+}
+
+func (s *Service) Register(email, password string) (string, error) {
+	if s.userStore == nil {
+		return "", errors.New("registration not supported")
+	}
+	hasUsers, err := s.userStore.HasUsers()
+	if err != nil {
+		return "", err
+	}
+	if hasUsers {
+		return "", errors.New("admin already exists")
+	}
+	hash, err := HashPassword(password)
+	if err != nil {
+		return "", err
+	}
+	return s.userStore.CreateUser(email, hash, "admin")
+}
+
+func (s *Service) HasUsers() bool {
+	if s.userStore == nil {
+		return true
+	}
+	has, err := s.userStore.HasUsers()
+	if err != nil {
+		return true
+	}
+	return has
 }
 
 func (s *Service) signClaims(claims Claims) (string, error) {

@@ -596,11 +596,26 @@ class _AccountTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final error = account.lastError.trim();
     return ListTile(
       leading: const Icon(Icons.account_circle_outlined),
       title: Text(account.displayName, overflow: TextOverflow.ellipsis),
-      subtitle: Text(account.email, overflow: TextOverflow.ellipsis),
-      trailing: _ProviderBadge(provider: account.provider),
+      subtitle: Text(
+        error.isEmpty ? account.email : '${account.email} · ${account.status}',
+        overflow: TextOverflow.ellipsis,
+      ),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (error.isNotEmpty)
+            Tooltip(
+              message: error,
+              child: Icon(Icons.error_outline_rounded,
+                  color: Theme.of(context).colorScheme.error, size: 18),
+            ),
+          _ProviderBadge(provider: account.provider),
+        ],
+      ),
     );
   }
 }
@@ -893,13 +908,28 @@ class _AddAccountDialog extends StatefulWidget {
 class _AddAccountDialogState extends State<_AddAccountDialog> {
   final _email = TextEditingController();
   final _displayName = TextEditingController();
-  String _provider = 'mock';
+  final _username = TextEditingController();
+  final _password = TextEditingController();
+  final _imapHost = TextEditingController(text: 'imap.gmail.com');
+  final _imapPort = TextEditingController(text: '993');
+  final _smtpHost = TextEditingController(text: 'smtp.gmail.com');
+  final _smtpPort = TextEditingController(text: '587');
+  String _provider = 'gmail';
+  bool _imapTls = true;
+  bool _smtpTls = true;
   bool _saving = false;
+  String? _formError;
 
   @override
   void dispose() {
     _email.dispose();
     _displayName.dispose();
+    _username.dispose();
+    _password.dispose();
+    _imapHost.dispose();
+    _imapPort.dispose();
+    _smtpHost.dispose();
+    _smtpPort.dispose();
     super.dispose();
   }
 
@@ -909,66 +939,151 @@ class _AddAccountDialogState extends State<_AddAccountDialog> {
     return AlertDialog(
       title: const Text('添加邮箱'),
       content: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 420),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            DropdownButtonFormField<String>(
-              value: _provider,
-              decoration: const InputDecoration(
-                prefixIcon: Icon(Icons.alternate_email_rounded),
-                labelText: '邮箱类型',
-              ),
-              items: const [
-                DropdownMenuItem(value: 'mock', child: Text('演示邮箱')),
-                DropdownMenuItem(value: 'imap', child: Text('IMAP/SMTP')),
-                DropdownMenuItem(value: 'gmail', child: Text('Gmail')),
-                DropdownMenuItem(value: 'outlook', child: Text('Outlook')),
-              ],
-              onChanged: (value) => setState(() => _provider = value ?? 'mock'),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _email,
-              keyboardType: TextInputType.emailAddress,
-              decoration: const InputDecoration(
-                prefixIcon: Icon(Icons.mail_outline_rounded),
-                labelText: '邮箱地址',
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _displayName,
-              decoration: const InputDecoration(
-                prefixIcon: Icon(Icons.badge_outlined),
-                labelText: '显示名称，可选',
-              ),
-            ),
-            if (_provider != 'mock') ...[
-              const SizedBox(height: 12),
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: scheme.secondaryContainer.withOpacity(0.55),
-                  borderRadius: BorderRadius.circular(8),
+        constraints: const BoxConstraints(maxWidth: 460, maxHeight: 620),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              DropdownButtonFormField<String>(
+                value: _provider,
+                decoration: const InputDecoration(
+                  prefixIcon: Icon(Icons.alternate_email_rounded),
+                  labelText: '邮箱类型',
                 ),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                items: const [
+                  DropdownMenuItem(value: 'gmail', child: Text('Gmail')),
+                  DropdownMenuItem(value: 'outlook', child: Text('Outlook')),
+                  DropdownMenuItem(value: 'imap', child: Text('IMAP/SMTP')),
+                  DropdownMenuItem(value: 'mock', child: Text('演示邮箱')),
+                ],
+                onChanged: (value) => _setProvider(value ?? 'gmail'),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _email,
+                keyboardType: TextInputType.emailAddress,
+                autofillHints: const [AutofillHints.email],
+                decoration: const InputDecoration(
+                  prefixIcon: Icon(Icons.mail_outline_rounded),
+                  labelText: '邮箱地址',
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _displayName,
+                decoration: const InputDecoration(
+                  prefixIcon: Icon(Icons.badge_outlined),
+                  labelText: '显示名称，可选',
+                ),
+              ),
+              if (_provider != 'mock') ...[
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _username,
+                  keyboardType: TextInputType.emailAddress,
+                  autofillHints: const [AutofillHints.username],
+                  decoration: const InputDecoration(
+                    prefixIcon: Icon(Icons.person_outline_rounded),
+                    labelText: '登录用户名',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _password,
+                  obscureText: true,
+                  autofillHints: const [AutofillHints.password],
+                  decoration: const InputDecoration(
+                    prefixIcon: Icon(Icons.key_rounded),
+                    labelText: '邮箱密码 / 应用专用密码',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Row(
                   children: [
-                    Icon(Icons.info_outline_rounded,
-                        color: scheme.onSecondaryContainer),
-                    const SizedBox(width: 8),
                     Expanded(
-                      child: Text(
-                        '当前会先创建账号记录；真实授权、收信和发信同步需要后端 provider 接入后生效。',
-                        style: TextStyle(color: scheme.onSecondaryContainer),
+                      child: TextField(
+                        controller: _imapHost,
+                        decoration: const InputDecoration(
+                          prefixIcon: Icon(Icons.move_to_inbox_rounded),
+                          labelText: 'IMAP 服务器',
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    SizedBox(
+                      width: 96,
+                      child: TextField(
+                        controller: _imapPort,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(labelText: '端口'),
                       ),
                     ),
                   ],
                 ),
-              ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  value: _imapTls,
+                  onChanged: (value) => setState(() => _imapTls = value),
+                  secondary: const Icon(Icons.lock_outline_rounded),
+                  title: const Text('IMAP TLS'),
+                ),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _smtpHost,
+                        decoration: const InputDecoration(
+                          prefixIcon: Icon(Icons.outbox_rounded),
+                          labelText: 'SMTP 服务器',
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    SizedBox(
+                      width: 96,
+                      child: TextField(
+                        controller: _smtpPort,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(labelText: '端口'),
+                      ),
+                    ),
+                  ],
+                ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  value: _smtpTls,
+                  onChanged: (value) => setState(() => _smtpTls = value),
+                  secondary: const Icon(Icons.lock_outline_rounded),
+                  title: const Text('SMTP TLS / STARTTLS'),
+                ),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: scheme.secondaryContainer.withOpacity(0.55),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(Icons.info_outline_rounded,
+                          color: scheme.onSecondaryContainer),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Gmail 和 Outlook 通常需要应用专用密码，并且账号侧要允许 IMAP。',
+                          style: TextStyle(color: scheme.onSecondaryContainer),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+              if (_formError != null) ...[
+                const SizedBox(height: 12),
+                _InlineError(text: _formError!),
+              ],
             ],
-          ],
+          ),
         ),
       ),
       actions: [
@@ -993,17 +1108,86 @@ class _AddAccountDialogState extends State<_AddAccountDialog> {
   Future<void> _submit() async {
     final email = _email.text.trim();
     if (!email.contains('@')) {
+      setState(() => _formError = '请填写有效邮箱地址');
       return;
     }
-    setState(() => _saving = true);
+    final imapPort = _parsePort(_imapPort.text);
+    final smtpPort = _parsePort(_smtpPort.text);
+    if (_provider != 'mock' &&
+        (_password.text.isEmpty ||
+            _imapHost.text.trim().isEmpty ||
+            _smtpHost.text.trim().isEmpty ||
+            imapPort == null ||
+            smtpPort == null)) {
+      setState(() => _formError = '请补全密码、服务器和端口');
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _formError = null;
+    });
     await widget.state.addAccount(
       provider: _provider,
       email: email,
       displayName: _displayName.text.trim(),
+      username: _username.text.trim(),
+      password: _password.text,
+      imapHost: _imapHost.text.trim(),
+      imapPort: imapPort ?? 0,
+      imapTls: _imapTls,
+      smtpHost: _smtpHost.text.trim(),
+      smtpPort: smtpPort ?? 0,
+      smtpTls: _smtpTls,
     );
-    if (mounted) {
-      Navigator.of(context).pop();
+    if (!mounted) {
+      return;
     }
+    if (widget.state.error != null) {
+      setState(() => _saving = false);
+      return;
+    }
+    Navigator.of(context).pop();
+  }
+
+  void _setProvider(String provider) {
+    setState(() {
+      _provider = provider;
+      _formError = null;
+      switch (provider) {
+        case 'gmail':
+          _imapHost.text = 'imap.gmail.com';
+          _imapPort.text = '993';
+          _smtpHost.text = 'smtp.gmail.com';
+          _smtpPort.text = '587';
+          _imapTls = true;
+          _smtpTls = true;
+          break;
+        case 'outlook':
+          _imapHost.text = 'outlook.office365.com';
+          _imapPort.text = '993';
+          _smtpHost.text = 'smtp.office365.com';
+          _smtpPort.text = '587';
+          _imapTls = true;
+          _smtpTls = true;
+          break;
+        case 'imap':
+          _imapHost.clear();
+          _imapPort.text = '993';
+          _smtpHost.clear();
+          _smtpPort.text = '587';
+          _imapTls = true;
+          _smtpTls = true;
+          break;
+      }
+    });
+  }
+
+  int? _parsePort(String value) {
+    final port = int.tryParse(value.trim());
+    if (port == null || port <= 0 || port > 65535) {
+      return null;
+    }
+    return port;
   }
 }
 

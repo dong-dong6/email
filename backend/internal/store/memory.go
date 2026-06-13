@@ -22,6 +22,7 @@ type Memory struct {
 	outbox   map[string]model.OutboxItem
 	rules    map[string]model.Rule
 	settings model.Settings
+	secrets  *SecretKeeper
 }
 
 func NewMemory() *Memory {
@@ -37,7 +38,18 @@ func NewMemory() *Memory {
 			Density:             "comfortable",
 			SignatureHTML:       "<p>Sent from self-hosted mail.</p>",
 		},
+		secrets: &SecretKeeper{},
 	}
+}
+
+func NewMemoryWithKey(key []byte) (*Memory, error) {
+	sk, err := NewSecretKeeper(key)
+	if err != nil {
+		return nil, err
+	}
+	m := NewMemory()
+	m.secrets = sk
+	return m, nil
 }
 
 func (m *Memory) SeedDemo(blobs *blob.Store) {
@@ -116,37 +128,53 @@ func (m *Memory) Snapshot() model.MailboxSnapshot {
 func (m *Memory) ListAccounts() []model.Account {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return mapValues(m.accounts)
+	out := make([]model.Account, 0, len(m.accounts))
+	for _, a := range m.accounts {
+		out = append(out, m.decryptAccount(a))
+	}
+	return out
 }
 
-func (m *Memory) CreateAccount(provider model.Provider, email, displayName string) model.Account {
+func (m *Memory) decryptAccount(a model.Account) model.Account {
+	a.Password = m.secrets.Decrypt(a.Password)
+	return a
+}
+
+func (m *Memory) CreateAccount(account model.Account) model.Account {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	now := time.Now()
-	account := model.Account{
-		ID:          NewID("acc"),
-		Provider:    provider,
-		Email:       email,
-		DisplayName: displayName,
-		Status:      model.AccountNeedsAuth,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+	account.ID = NewID("acc")
+	if account.DisplayName == "" {
+		account.DisplayName = account.Email
 	}
-	if provider == model.ProviderMock {
+	if account.Username == "" {
+		account.Username = account.Email
+	}
+	if account.Status == "" {
+		account.Status = model.AccountNeedsAuth
+	}
+	if account.Provider == model.ProviderMock {
 		account.Status = model.AccountActive
 	}
+	account.Password = m.secrets.Encrypt(account.Password)
+	account.CreatedAt = now
+	account.UpdatedAt = now
 	m.accounts[account.ID] = account
 	for _, folder := range defaultFolders(account.ID) {
 		m.folders[folder.ID] = folder
 	}
-	return account
+	return m.decryptAccount(account)
 }
 
 func (m *Memory) GetAccount(id string) (model.Account, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	account, ok := m.accounts[id]
-	return account, ok
+	if !ok {
+		return model.Account{}, false
+	}
+	return m.decryptAccount(account), true
 }
 
 func (m *Memory) UpdateAccount(account model.Account) {
@@ -236,6 +264,17 @@ func (m *Memory) GetMessage(id string) (model.Message, bool) {
 	defer m.mu.RUnlock()
 	msg, ok := m.messages[id]
 	return msg, ok
+}
+
+func (m *Memory) FindMessageByProvider(accountID, providerID string) (model.Message, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, msg := range m.messages {
+		if msg.AccountID == accountID && msg.ProviderID == providerID {
+			return msg, true
+		}
+	}
+	return model.Message{}, false
 }
 
 func (m *Memory) UpsertMessage(msg model.Message) model.Message {

@@ -148,6 +148,13 @@ class _MobileTopBar extends StatelessWidget {
               icon: const Icon(Icons.sync_rounded),
             ),
           ),
+          Tooltip(
+            message: '添加邮箱',
+            child: IconButton(
+              onPressed: () => _showAddAccount(context, state),
+              icon: const Icon(Icons.add_rounded),
+            ),
+          ),
         ],
       ),
     );
@@ -198,6 +205,14 @@ class _Sidebar extends StatelessWidget {
             onPressed: () => _showComposer(context, state),
             icon: const Icon(Icons.edit_rounded),
             label: const Text('写信'),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+          child: OutlinedButton.icon(
+            onPressed: () => _showAddAccount(context, state),
+            icon: const Icon(Icons.add_rounded),
+            label: const Text('添加邮箱'),
           ),
         ),
         const SizedBox(height: 12),
@@ -280,6 +295,7 @@ class _Rail extends StatelessWidget {
           ),
         ),
       ),
+      groupAlignment: -0.85,
       destinations: [
         for (final folder in folders)
           NavigationRailDestination(
@@ -865,6 +881,132 @@ class _ComposeDialogState extends State<_ComposeDialog> {
   }
 }
 
+class _AddAccountDialog extends StatefulWidget {
+  const _AddAccountDialog({required this.state});
+
+  final AppState state;
+
+  @override
+  State<_AddAccountDialog> createState() => _AddAccountDialogState();
+}
+
+class _AddAccountDialogState extends State<_AddAccountDialog> {
+  final _email = TextEditingController();
+  final _displayName = TextEditingController();
+  String _provider = 'mock';
+  bool _saving = false;
+
+  @override
+  void dispose() {
+    _email.dispose();
+    _displayName.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return AlertDialog(
+      title: const Text('添加邮箱'),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 420),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            DropdownButtonFormField<String>(
+              value: _provider,
+              decoration: const InputDecoration(
+                prefixIcon: Icon(Icons.alternate_email_rounded),
+                labelText: '邮箱类型',
+              ),
+              items: const [
+                DropdownMenuItem(value: 'mock', child: Text('演示邮箱')),
+                DropdownMenuItem(value: 'imap', child: Text('IMAP/SMTP')),
+                DropdownMenuItem(value: 'gmail', child: Text('Gmail')),
+                DropdownMenuItem(value: 'outlook', child: Text('Outlook')),
+              ],
+              onChanged: (value) => setState(() => _provider = value ?? 'mock'),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _email,
+              keyboardType: TextInputType.emailAddress,
+              decoration: const InputDecoration(
+                prefixIcon: Icon(Icons.mail_outline_rounded),
+                labelText: '邮箱地址',
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _displayName,
+              decoration: const InputDecoration(
+                prefixIcon: Icon(Icons.badge_outlined),
+                labelText: '显示名称，可选',
+              ),
+            ),
+            if (_provider != 'mock') ...[
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: scheme.secondaryContainer.withOpacity(0.55),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(Icons.info_outline_rounded,
+                        color: scheme.onSecondaryContainer),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '当前会先创建账号记录；真实授权、收信和发信同步需要后端 provider 接入后生效。',
+                        style: TextStyle(color: scheme.onSecondaryContainer),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.of(context).pop(),
+          child: const Text('取消'),
+        ),
+        FilledButton.icon(
+          onPressed: _saving ? null : _submit,
+          icon: _saving
+              ? const SizedBox.square(
+                  dimension: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.add_rounded),
+          label: const Text('添加'),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _submit() async {
+    final email = _email.text.trim();
+    if (!email.contains('@')) {
+      return;
+    }
+    setState(() => _saving = true);
+    await widget.state.addAccount(
+      provider: _provider,
+      email: email,
+      displayName: _displayName.text.trim(),
+    );
+    if (mounted) {
+      Navigator.of(context).pop();
+    }
+  }
+}
+
 class _SettingsSheet extends StatelessWidget {
   const _SettingsSheet({required this.state});
 
@@ -931,6 +1073,13 @@ void _showSettings(BuildContext context, AppState state) {
     showDragHandle: true,
     isScrollControlled: true,
     builder: (_) => _SettingsSheet(state: state),
+  );
+}
+
+void _showAddAccount(BuildContext context, AppState state) {
+  showDialog<void>(
+    context: context,
+    builder: (_) => _AddAccountDialog(state: state),
   );
 }
 

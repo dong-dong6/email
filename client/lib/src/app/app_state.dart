@@ -76,6 +76,61 @@ class AppState extends ChangeNotifier {
     });
   }
 
+  Future<void> addAccount({
+    required String provider,
+    required String email,
+    required String displayName,
+  }) async {
+    await _run(() async {
+      final account = await api.createAccount(
+        provider: provider,
+        email: email,
+        displayName: displayName.isEmpty ? email : displayName,
+      );
+      if (api.offlineMode) {
+        final current = snapshot ?? MailboxSnapshot.demo();
+        final folders = [
+          ...current.folders,
+          MailFolder(
+            id: 'fld_${account.id}_inbox',
+            accountId: account.id,
+            name: 'Inbox',
+            role: 'inbox',
+            unreadCount: 0,
+            totalCount: 0,
+          ),
+          MailFolder(
+            id: 'fld_${account.id}_sent',
+            accountId: account.id,
+            name: 'Sent',
+            role: 'sent',
+            unreadCount: 0,
+            totalCount: 0,
+          ),
+        ];
+        snapshot = MailboxSnapshot(
+          accounts: [...current.accounts, account],
+          folders: folders,
+          messages: current.messages,
+          settings: current.settings,
+        );
+      } else {
+        snapshot = await api.snapshot();
+      }
+      selectedFolderId = folders
+              .where((folder) =>
+                  folder.accountId == account.id && folder.role == 'inbox')
+              .firstOrNull
+              ?.id ??
+          folders
+              .where((folder) => folder.accountId == account.id)
+              .firstOrNull
+              ?.id ??
+          folders.firstOrNull?.id;
+      selectedMessageId = visibleMessages.firstOrNull?.id;
+    });
+  }
+
   void selectFolder(String id) {
     selectedFolderId = id;
     selectedMessageId = visibleMessages.firstOrNull?.id;

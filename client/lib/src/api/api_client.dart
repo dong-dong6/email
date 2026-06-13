@@ -55,6 +55,28 @@ class ApiClient {
     }
   }
 
+  Future<MailAccount> createAccount({
+    required String provider,
+    required String email,
+    required String displayName,
+  }) async {
+    if (offlineMode) {
+      return MailAccount(
+        id: 'acc_${DateTime.now().microsecondsSinceEpoch}',
+        provider: provider,
+        email: email,
+        displayName: displayName,
+        status: provider == 'mock' ? 'active' : 'needs_auth',
+      );
+    }
+    final response = await _json('POST', '/api/v1/accounts', body: {
+      'provider': provider,
+      'email': email,
+      'display_name': displayName,
+    });
+    return MailAccount.fromJson(response);
+  }
+
   Future<void> patchMessage(String id, {bool? isRead, bool? isStarred}) async {
     if (offlineMode) {
       return;
@@ -121,7 +143,7 @@ Uri _parseBaseUrl(String value) {
     normalized = 'http://localhost:8080';
   }
   if (!normalized.startsWith('http://') && !normalized.startsWith('https://')) {
-    normalized = 'https://$normalized';
+    normalized = 'http://$normalized';
   }
   final uri = Uri.parse(normalized);
   if (!uri.hasScheme || uri.host.isEmpty) {

@@ -226,12 +226,16 @@ class _Sidebar extends StatelessWidget {
           child: ListView(
             children: [
               for (final account in state.accounts)
-                _AccountTile(account: account),
+                _AccountTile(
+                  account: account,
+                  selected: state.selectedAccount?.id == account.id,
+                  onTap: () => state.selectAccount(account.id),
+                ),
               const Padding(
                 padding: EdgeInsets.fromLTRB(16, 18, 16, 8),
                 child: Text('文件夹'),
               ),
-              for (final folder in state.folders)
+              for (final folder in state.visibleFolders)
                 _FolderTile(
                   folder: folder,
                   selected: state.selectedFolder?.id == folder.id,
@@ -681,14 +685,23 @@ class _HtmlMessageView extends StatelessWidget {
 }
 
 class _AccountTile extends StatelessWidget {
-  const _AccountTile({required this.account});
+  const _AccountTile({
+    required this.account,
+    required this.selected,
+    required this.onTap,
+  });
 
   final MailAccount account;
+  final bool selected;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final error = account.lastError.trim();
     return ListTile(
+      selected: selected,
+      selectedTileColor:
+          Theme.of(context).colorScheme.secondaryContainer.withOpacity(0.36),
       leading: const Icon(Icons.account_circle_outlined),
       title: Text(account.displayName, overflow: TextOverflow.ellipsis),
       subtitle: Text(
@@ -707,6 +720,7 @@ class _AccountTile extends StatelessWidget {
           _ProviderBadge(provider: account.provider),
         ],
       ),
+      onTap: onTap,
     );
   }
 }
@@ -765,14 +779,17 @@ class _CountBadge extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Container(
-      constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
+      constraints: const BoxConstraints(minWidth: 24),
+      height: 20,
       alignment: Alignment.center,
-      padding: const EdgeInsets.symmetric(horizontal: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 7),
       decoration: BoxDecoration(
-          color: scheme.primary, borderRadius: BorderRadius.circular(999)),
+          color: scheme.primary, borderRadius: BorderRadius.circular(10)),
       child: Text('$count',
-          style:
-              TextStyle(color: scheme.onPrimary, fontWeight: FontWeight.w700)),
+          style: TextStyle(
+              color: scheme.onPrimary,
+              fontSize: 11,
+              fontWeight: FontWeight.w700)),
     );
   }
 }

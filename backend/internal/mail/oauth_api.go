@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -26,6 +27,8 @@ type oauthToken struct {
 }
 
 func (c OAuthAPIConnector) Sync(ctx context.Context, account model.Account) error {
+	started := time.Now()
+	slog.Info("oauth sync started", "provider", c.provider, "account_id", account.ID, "email", account.Email)
 	if c.db == nil {
 		return errors.New("oauth connector store is not configured")
 	}
@@ -39,12 +42,20 @@ func (c OAuthAPIConnector) Sync(ctx context.Context, account model.Account) erro
 	}
 	switch c.provider {
 	case model.ProviderGmail:
-		return c.syncGmail(ctx, account, folder, token.AccessToken)
+		if err := c.syncGmail(ctx, account, folder, token.AccessToken); err != nil {
+			slog.Error("oauth sync failed", "provider", c.provider, "account_id", account.ID, "email", account.Email, "error", err)
+			return err
+		}
 	case model.ProviderOutlook:
-		return c.syncOutlook(ctx, account, folder, token.AccessToken)
+		if err := c.syncOutlook(ctx, account, folder, token.AccessToken); err != nil {
+			slog.Error("oauth sync failed", "provider", c.provider, "account_id", account.ID, "email", account.Email, "error", err)
+			return err
+		}
 	default:
 		return errors.New("unsupported oauth provider")
 	}
+	slog.Info("oauth sync completed", "provider", c.provider, "account_id", account.ID, "email", account.Email, "duration_ms", time.Since(started).Milliseconds())
+	return nil
 }
 
 func (c OAuthAPIConnector) authorizedToken(ctx context.Context, account model.Account) (oauthToken, error) {
@@ -58,6 +69,7 @@ func (c OAuthAPIConnector) authorizedToken(ctx context.Context, account model.Ac
 	if token.ExpiresAt == 0 || time.Until(time.Unix(token.ExpiresAt, 0)) > 90*time.Second {
 		return token, nil
 	}
+	slog.Info("oauth token refresh started", "provider", c.provider, "account_id", account.ID, "email", account.Email)
 	if token.RefreshToken == "" {
 		return token, errors.New("OAuth token 已过期且缺少 refresh token，请重新授权")
 	}
@@ -74,6 +86,7 @@ func (c OAuthAPIConnector) authorizedToken(ctx context.Context, account model.Ac
 	}
 	account.Password = string(data)
 	c.db.UpdateAccount(account)
+	slog.Info("oauth token refresh completed", "provider", c.provider, "account_id", account.ID, "email", account.Email)
 	return refreshed, nil
 }
 
@@ -119,6 +132,7 @@ func (c OAuthAPIConnector) refreshToken(ctx context.Context, token oauthToken) (
 }
 
 func (c OAuthAPIConnector) syncGmail(ctx context.Context, account model.Account, folder model.Folder, accessToken string) error {
+	slog.Info("gmail list request started", "account_id", account.ID, "email", account.Email, "folder_id", folder.ID)
 	var list struct {
 		Messages []struct {
 			ID string `json:"id"`
@@ -131,12 +145,17 @@ func (c OAuthAPIConnector) syncGmail(ctx context.Context, account model.Account,
 	if err := doJSON(req, &list); err != nil {
 		return fmt.Errorf("拉取 Gmail 邮件列表失败: %w", err)
 	}
+	slog.Info("gmail list request completed", "account_id", account.ID, "email", account.Email, "message_count", len(list.Messages))
+	synced := 0
+	failed := 0
 	for _, item := range list.Messages {
 		if strings.TrimSpace(item.ID) == "" {
 			continue
 		}
 		msg, err := c.fetchGmailMessage(ctx, account, folder, accessToken, item.ID)
 		if err != nil {
+			failed++
+			slog.Warn("gmail message fetch failed", "account_id", account.ID, "email", account.Email, "provider_id", item.ID, "error", err)
 			continue
 		}
 		if existing, ok := c.db.FindMessageByProvider(account.ID, msg.ProviderID); ok {
@@ -145,7 +164,9 @@ func (c OAuthAPIConnector) syncGmail(ctx context.Context, account model.Account,
 		}
 		msg = c.db.UpsertMessage(msg)
 		c.broker.Publish(model.Event{Type: "message.synced", AccountID: account.ID, MessageID: msg.ID, Payload: msg})
+		synced++
 	}
+	slog.Info("gmail messages synced", "account_id", account.ID, "email", account.Email, "synced", synced, "failed", failed)
 	return nil
 }
 
@@ -191,6 +212,7 @@ func (c OAuthAPIConnector) fetchGmailMessage(ctx context.Context, account model.
 }
 
 func (c OAuthAPIConnector) syncOutlook(ctx context.Context, account model.Account, folder model.Folder, accessToken string) error {
+	slog.Info("outlook list request started", "account_id", account.ID, "email", account.Email, "folder_id", folder.ID)
 	var list struct {
 		Value []outlookMessage `json:"value"`
 	}
@@ -202,6 +224,8 @@ func (c OAuthAPIConnector) syncOutlook(ctx context.Context, account model.Accoun
 	if err := doJSON(req, &list); err != nil {
 		return fmt.Errorf("拉取 Outlook 邮件列表失败: %w", err)
 	}
+	slog.Info("outlook list request completed", "account_id", account.ID, "email", account.Email, "message_count", len(list.Value))
+	synced := 0
 	for _, item := range list.Value {
 		receivedAt := time.Now()
 		if parsed, err := time.Parse(time.RFC3339, item.ReceivedDateTime); err == nil {
@@ -233,7 +257,9 @@ func (c OAuthAPIConnector) syncOutlook(ctx context.Context, account model.Accoun
 		}
 		msg = c.db.UpsertMessage(msg)
 		c.broker.Publish(model.Event{Type: "message.synced", AccountID: account.ID, MessageID: msg.ID, Payload: msg})
+		synced++
 	}
+	slog.Info("outlook messages synced", "account_id", account.ID, "email", account.Email, "synced", synced)
 	return nil
 }
 

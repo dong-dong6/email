@@ -23,6 +23,26 @@ class AppState extends ChangeNotifier {
   bool get offlineMode => api.offlineMode;
   String get apiBaseUrl => api.baseUrl;
 
+  MailAccount? get selectedAccount {
+    final folder = selectedFolder;
+    if (folder != null) {
+      return accounts
+          .where((account) => account.id == folder.accountId)
+          .firstOrNull;
+    }
+    return accounts.firstOrNull;
+  }
+
+  List<MailFolder> get visibleFolders {
+    final account = selectedAccount;
+    if (account == null) {
+      return folders;
+    }
+    return folders
+        .where((folder) => folder.accountId == account.id)
+        .toList(growable: false);
+  }
+
   MailFolder? get selectedFolder {
     final id = selectedFolderId;
     if (id == null) {
@@ -99,7 +119,10 @@ class AppState extends ChangeNotifier {
   Future<void> reload() async {
     await _run(() async {
       snapshot = await api.snapshot();
-      selectedFolderId ??= folders.firstOrNull?.id;
+      if (selectedFolderId == null ||
+          !folders.any((folder) => folder.id == selectedFolderId)) {
+        selectedFolderId = folders.firstOrNull?.id;
+      }
       selectedMessageId ??= visibleMessages.firstOrNull?.id;
     });
   }
@@ -210,6 +233,17 @@ class AppState extends ChangeNotifier {
 
   void selectFolder(String id) {
     selectedFolderId = id;
+    selectedMessageId = visibleMessages.firstOrNull?.id;
+    notifyListeners();
+  }
+
+  void selectAccount(String id) {
+    selectedFolderId = folders
+            .where((folder) => folder.accountId == id && folder.role == 'inbox')
+            .firstOrNull
+            ?.id ??
+        folders.where((folder) => folder.accountId == id).firstOrNull?.id ??
+        selectedFolderId;
     selectedMessageId = visibleMessages.firstOrNull?.id;
     notifyListeners();
   }

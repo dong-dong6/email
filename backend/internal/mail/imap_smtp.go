@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime"
 	"mime/multipart"
 	"mime/quotedprintable"
@@ -45,18 +46,23 @@ func (c IMAPSMTPConnector) AuthorizeURL(state string) (string, error) {
 }
 
 func (c IMAPSMTPConnector) Sync(ctx context.Context, account model.Account) error {
+	started := time.Now()
 	account, err := NormalizeAccount(account)
 	if err != nil {
 		return err
 	}
+	slog.Info("imap sync started", "account_id", account.ID, "email", account.Email, "imap_host", account.IMAPHost, "imap_port", account.IMAPPort)
 	client, err := dialIMAP(ctx, account)
 	if err != nil {
+		slog.Error("imap connect failed", "account_id", account.ID, "email", account.Email, "imap_host", account.IMAPHost, "error", err)
 		return err
 	}
 	defer client.close()
 	if err := client.login(account.Username, account.Password); err != nil {
+		slog.Error("imap login failed", "account_id", account.ID, "email", account.Email, "username", account.Username, "error", err)
 		return err
 	}
+	slog.Info("imap login completed", "account_id", account.ID, "email", account.Email, "username", account.Username)
 
 	syncFolders := []struct {
 		mailbox string
@@ -71,15 +77,19 @@ func (c IMAPSMTPConnector) Sync(ctx context.Context, account model.Account) erro
 
 	for _, sf := range syncFolders {
 		if err := c.syncFolder(ctx, client, account, sf.mailbox, sf.role); err != nil {
+			slog.Warn("imap folder sync skipped", "account_id", account.ID, "email", account.Email, "mailbox", sf.mailbox, "role", sf.role, "error", err)
 			continue
 		}
 	}
 
 	_ = client.logout()
+	slog.Info("imap sync completed", "account_id", account.ID, "email", account.Email, "duration_ms", time.Since(started).Milliseconds())
 	return nil
 }
 
 func (c IMAPSMTPConnector) syncFolder(ctx context.Context, client *imapClient, account model.Account, mailbox, role string) error {
+	started := time.Now()
+	slog.Info("imap folder sync started", "account_id", account.ID, "email", account.Email, "mailbox", mailbox, "role", role)
 	if err := client.selectMailbox(mailbox); err != nil {
 		return err
 	}
@@ -110,7 +120,10 @@ func (c IMAPSMTPConnector) syncFolder(ctx context.Context, client *imapClient, a
 			return err
 		}
 	}
+	slog.Info("imap folder uid search completed", "account_id", account.ID, "email", account.Email, "mailbox", mailbox, "role", role, "uid_count", len(uids))
 
+	synced := 0
+	failed := 0
 	for _, uid := range uids {
 		providerID := "imap:" + uid
 		if existing, ok := c.db.FindMessageByProvider(account.ID, providerID); ok {
@@ -121,10 +134,14 @@ func (c IMAPSMTPConnector) syncFolder(ctx context.Context, client *imapClient, a
 
 		raw, flags, err := client.fetchRFC822(uid)
 		if err != nil {
+			failed++
+			slog.Warn("imap message fetch failed", "account_id", account.ID, "email", account.Email, "mailbox", mailbox, "uid", uid, "error", err)
 			continue
 		}
 		msg, err := parseIMAPMessage(raw)
 		if err != nil {
+			failed++
+			slog.Warn("imap message parse failed", "account_id", account.ID, "email", account.Email, "mailbox", mailbox, "uid", uid, "error", err)
 			continue
 		}
 		msg.AccountID = account.ID
@@ -140,7 +157,9 @@ func (c IMAPSMTPConnector) syncFolder(ctx context.Context, client *imapClient, a
 		}
 		msg = c.db.UpsertMessage(msg)
 		c.broker.Publish(model.Event{Type: "message.synced", AccountID: account.ID, MessageID: msg.ID, Payload: msg})
+		synced++
 	}
+	slog.Info("imap folder sync completed", "account_id", account.ID, "email", account.Email, "mailbox", mailbox, "role", role, "synced", synced, "failed", failed, "duration_ms", time.Since(started).Milliseconds())
 	return nil
 }
 

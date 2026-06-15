@@ -239,9 +239,11 @@ func (s *Server) accounts(w http.ResponseWriter, r *http.Request) {
 			account.Status = model.AccountSyncing
 			s.db.UpdateAccount(account)
 			go func() {
+				slog.Info("account sync started", "account_id", account.ID, "provider", account.Provider, "email", account.Email, "trigger", "account_created")
 				if err := connector.Sync(context.Background(), account); err != nil {
 					account.Status = model.AccountError
 					account.LastError = err.Error()
+					slog.Error("account sync failed", "account_id", account.ID, "provider", account.Provider, "email", account.Email, "error", err)
 				} else {
 					if refreshed, ok := s.db.GetAccount(account.ID); ok {
 						account = refreshed
@@ -249,6 +251,7 @@ func (s *Server) accounts(w http.ResponseWriter, r *http.Request) {
 					account.Status = model.AccountActive
 					account.LastError = ""
 					account.SyncCursor = strconv.FormatInt(time.Now().UnixNano(), 10)
+					slog.Info("account sync completed", "account_id", account.ID, "provider", account.Provider, "email", account.Email, "cursor", account.SyncCursor)
 				}
 				s.db.UpdateAccount(account)
 				s.broker.Publish(model.Event{Type: "account.synced", AccountID: account.ID, Payload: account})
@@ -699,9 +702,11 @@ func (s *Server) syncAccount(w http.ResponseWriter, r *http.Request, accountID s
 	account.Status = model.AccountSyncing
 	s.db.UpdateAccount(account)
 	go func() {
+		slog.Info("account sync started", "account_id", account.ID, "provider", account.Provider, "email", account.Email, "trigger", "manual")
 		if err := connector.Sync(context.Background(), account); err != nil {
 			account.Status = model.AccountError
 			account.LastError = err.Error()
+			slog.Error("account sync failed", "account_id", account.ID, "provider", account.Provider, "email", account.Email, "error", err)
 		} else {
 			if refreshed, ok := s.db.GetAccount(account.ID); ok {
 				account = refreshed
@@ -709,6 +714,7 @@ func (s *Server) syncAccount(w http.ResponseWriter, r *http.Request, accountID s
 			account.Status = model.AccountActive
 			account.LastError = ""
 			account.SyncCursor = strconv.FormatInt(time.Now().UnixNano(), 10)
+			slog.Info("account sync completed", "account_id", account.ID, "provider", account.Provider, "email", account.Email, "cursor", account.SyncCursor)
 		}
 		s.db.UpdateAccount(account)
 		s.broker.Publish(model.Event{Type: "account.synced", AccountID: account.ID, Payload: account})

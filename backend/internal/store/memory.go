@@ -33,11 +33,13 @@ func NewMemory() *Memory {
 		outbox:   make(map[string]model.OutboxItem),
 		rules:    make(map[string]model.Rule),
 		settings: model.Settings{
-			RemoteImagesDefault: false,
-			Density:             "comfortable",
-			SignatureHTML:       "<p>由自托管邮箱发送。</p>",
-			GmailClientID:       "",
-			MicrosoftClientID:   "",
+			RemoteImagesDefault:   false,
+			Density:               "comfortable",
+			SignatureHTML:         "<p>由自托管邮箱发送。</p>",
+			GmailClientID:         "",
+			GmailClientSecret:     "",
+			MicrosoftClientID:     "",
+			MicrosoftClientSecret: "",
 		},
 		secrets: &SecretKeeper{},
 	}

@@ -206,14 +206,18 @@ class MailSettings {
     required this.density,
     required this.signatureHtml,
     required this.gmailClientId,
+    required this.gmailClientSecret,
     required this.microsoftClientId,
+    required this.microsoftClientSecret,
   });
 
   final bool remoteImagesDefault;
   final String density;
   final String signatureHtml;
   final String gmailClientId;
+  final String gmailClientSecret;
   final String microsoftClientId;
+  final String microsoftClientSecret;
 
   factory MailSettings.fromJson(Map<String, dynamic> json) {
     return MailSettings(
@@ -221,7 +225,9 @@ class MailSettings {
       density: json['density'] as String? ?? 'comfortable',
       signatureHtml: json['signature_html'] as String? ?? '',
       gmailClientId: json['gmail_client_id'] as String? ?? '',
+      gmailClientSecret: json['gmail_client_secret'] as String? ?? '',
       microsoftClientId: json['microsoft_client_id'] as String? ?? '',
+      microsoftClientSecret: json['microsoft_client_secret'] as String? ?? '',
     );
   }
 
@@ -230,14 +236,19 @@ class MailSettings {
     String? density,
     String? signatureHtml,
     String? gmailClientId,
+    String? gmailClientSecret,
     String? microsoftClientId,
+    String? microsoftClientSecret,
   }) {
     return MailSettings(
       remoteImagesDefault: remoteImagesDefault ?? this.remoteImagesDefault,
       density: density ?? this.density,
       signatureHtml: signatureHtml ?? this.signatureHtml,
       gmailClientId: gmailClientId ?? this.gmailClientId,
+      gmailClientSecret: gmailClientSecret ?? this.gmailClientSecret,
       microsoftClientId: microsoftClientId ?? this.microsoftClientId,
+      microsoftClientSecret:
+          microsoftClientSecret ?? this.microsoftClientSecret,
     );
   }
 
@@ -246,7 +257,9 @@ class MailSettings {
         'density': density,
         'signature_html': signatureHtml,
         'gmail_client_id': gmailClientId,
+        'gmail_client_secret': gmailClientSecret,
         'microsoft_client_id': microsoftClientId,
+        'microsoft_client_secret': microsoftClientSecret,
       };
 }
 
@@ -293,7 +306,9 @@ class MailboxSnapshot {
         density: 'comfortable',
         signatureHtml: '<p>由自托管邮箱发送。</p>',
         gmailClientId: '',
+        gmailClientSecret: '',
         microsoftClientId: '',
+        microsoftClientSecret: '',
       ),
     );
   }

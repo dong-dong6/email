@@ -13,7 +13,9 @@ CREATE TABLE IF NOT EXISTS settings (
   density TEXT NOT NULL DEFAULT 'comfortable',
   signature_html TEXT NOT NULL DEFAULT '<p>由自托管邮箱发送。</p>',
   gmail_client_id TEXT NOT NULL DEFAULT '',
-  microsoft_client_id TEXT NOT NULL DEFAULT ''
+  gmail_client_secret TEXT NOT NULL DEFAULT '',
+  microsoft_client_id TEXT NOT NULL DEFAULT '',
+  microsoft_client_secret TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS accounts (

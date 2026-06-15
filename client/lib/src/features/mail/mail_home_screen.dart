@@ -1020,7 +1020,9 @@ class _AddAccountDialogState extends State<_AddAccountDialog> {
   final _username = TextEditingController();
   final _password = TextEditingController();
   final _gmailClientId = TextEditingController();
+  final _gmailClientSecret = TextEditingController();
   final _microsoftClientId = TextEditingController();
+  final _microsoftClientSecret = TextEditingController();
   final _imapHost = TextEditingController();
   final _imapPort = TextEditingController(text: '993');
   final _smtpHost = TextEditingController();
@@ -1043,7 +1045,9 @@ class _AddAccountDialogState extends State<_AddAccountDialog> {
     _username.dispose();
     _password.dispose();
     _gmailClientId.dispose();
+    _gmailClientSecret.dispose();
     _microsoftClientId.dispose();
+    _microsoftClientSecret.dispose();
     _imapHost.dispose();
     _imapPort.dispose();
     _smtpHost.dispose();
@@ -1056,7 +1060,9 @@ class _AddAccountDialogState extends State<_AddAccountDialog> {
     super.initState();
     final settings = widget.state.snapshot?.settings;
     _gmailClientId.text = settings?.gmailClientId ?? '';
+    _gmailClientSecret.text = settings?.gmailClientSecret ?? '';
     _microsoftClientId.text = settings?.microsoftClientId ?? '';
+    _microsoftClientSecret.text = settings?.microsoftClientSecret ?? '';
   }
 
   @override
@@ -1095,6 +1101,9 @@ class _AddAccountDialogState extends State<_AddAccountDialog> {
                   clientIdController: _provider == 'gmail'
                       ? _gmailClientId
                       : _microsoftClientId,
+                  clientSecretController: _provider == 'gmail'
+                      ? _gmailClientSecret
+                      : _microsoftClientSecret,
                   onCopy: _copyOAuthUrl,
                 ),
               ] else ...[
@@ -1230,16 +1239,26 @@ class _AddAccountDialogState extends State<_AddAccountDialog> {
           child: const Text('取消'),
         ),
         FilledButton.icon(
-          onPressed: _saving ? null : _submit,
+          onPressed: _saving
+              ? null
+              : _oauthStatus?.status == 'completed'
+                  ? _finishOAuth
+                  : _submit,
           icon: _saving
               ? const SizedBox.square(
                   dimension: 18,
                   child: CircularProgressIndicator(strokeWidth: 2),
                 )
-              : Icon(_isOAuthProvider
-                  ? Icons.open_in_browser_rounded
-                  : Icons.add_rounded),
-          label: Text(_isOAuthProvider ? '生成授权链接' : '添加'),
+              : Icon(_oauthStatus?.status == 'completed'
+                  ? Icons.check_rounded
+                  : _isOAuthProvider
+                      ? Icons.open_in_browser_rounded
+                      : Icons.add_rounded),
+          label: Text(_oauthStatus?.status == 'completed'
+              ? '完成'
+              : _isOAuthProvider
+                  ? '生成授权链接'
+                  : '添加'),
         ),
       ],
     );
@@ -1251,10 +1270,20 @@ class _AddAccountDialogState extends State<_AddAccountDialog> {
           (_provider == 'gmail' ? _gmailClientId : _microsoftClientId)
               .text
               .trim();
+      final clientSecret =
+          (_provider == 'gmail' ? _gmailClientSecret : _microsoftClientSecret)
+              .text
+              .trim();
       if (clientId.isEmpty) {
         setState(() => _formError = _provider == 'gmail'
             ? '请填写 Google OAuth Client ID'
             : '请填写 Microsoft OAuth Client ID');
+        return;
+      }
+      if (clientSecret.isEmpty) {
+        setState(() => _formError = _provider == 'gmail'
+            ? '请填写 Google OAuth Client Secret'
+            : '请填写 Microsoft OAuth Client Secret');
         return;
       }
       setState(() {
@@ -1270,7 +1299,9 @@ class _AddAccountDialogState extends State<_AddAccountDialog> {
       await widget.state.updateSettings(
         current.copyWith(
           gmailClientId: _provider == 'gmail' ? clientId : null,
+          gmailClientSecret: _provider == 'gmail' ? clientSecret : null,
           microsoftClientId: _provider == 'outlook' ? clientId : null,
+          microsoftClientSecret: _provider == 'outlook' ? clientSecret : null,
         ),
       );
       if (!mounted) {
@@ -1422,7 +1453,8 @@ class _AddAccountDialogState extends State<_AddAccountDialog> {
       if (status.isTerminal) {
         _oauthPoller?.cancel();
       }
-      if (status.status == 'callback_received') {
+      if (status.status == 'callback_received' ||
+          status.status == 'completed') {
         widget.state.reload();
       }
     } catch (error) {
@@ -1432,6 +1464,11 @@ class _AddAccountDialogState extends State<_AddAccountDialog> {
       setState(() => _oauthStatusError = error.toString());
       return;
     }
+  }
+
+  void _finishOAuth() {
+    widget.state.reload();
+    Navigator.of(context).pop();
   }
 
   int? _parsePort(String value) {
@@ -1450,6 +1487,7 @@ class _OAuthProviderPanel extends StatelessWidget {
     required this.oauthStatus,
     required this.oauthStatusError,
     required this.clientIdController,
+    required this.clientSecretController,
     required this.onCopy,
   });
 
@@ -1458,6 +1496,7 @@ class _OAuthProviderPanel extends StatelessWidget {
   final OAuthStatus? oauthStatus;
   final String? oauthStatusError;
   final TextEditingController clientIdController;
+  final TextEditingController clientSecretController;
   final VoidCallback onCopy;
 
   @override
@@ -1519,8 +1558,19 @@ class _OAuthProviderPanel extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 12),
+        TextField(
+          controller: clientSecretController,
+          obscureText: true,
+          decoration: InputDecoration(
+            prefixIcon: const Icon(Icons.password_rounded),
+            labelText: isGmail
+                ? 'Google OAuth Client Secret'
+                : 'Microsoft OAuth Client Secret',
+          ),
+        ),
+        const SizedBox(height: 12),
         const _OAuthStep(text: '1. 在官方控制台创建 OAuth 应用，并把回调地址填进去'),
-        const _OAuthStep(text: '2. 在这里填写 Client ID，客户端会上传保存到后端'),
+        const _OAuthStep(text: '2. 在这里填写 Client ID 和 Secret，客户端会上传保存到后端'),
         const _OAuthStep(text: '3. 生成授权链接，复制到浏览器打开并登录官方账号授权'),
         if (oauthStart != null) ...[
           const SizedBox(height: 12),
@@ -1573,8 +1623,8 @@ class _OAuthStatusCard extends StatelessWidget {
     final current = status;
     final queryError = error;
     final isError = current?.status == 'error' || queryError != null;
-    final isDone = current?.status == 'callback_received' ||
-        current?.status == 'completed';
+    final isCompleted = current?.status == 'completed';
+    final isDone = current?.status == 'callback_received' || isCompleted;
     final icon = isError
         ? Icons.error_outline_rounded
         : isDone
@@ -1585,7 +1635,9 @@ class _OAuthStatusCard extends StatelessWidget {
             ? '授权失败'
             : '状态查询失败'
         : isDone
-            ? '浏览器授权已返回后端'
+            ? isCompleted
+                ? '邮箱绑定完成'
+                : '浏览器授权已返回后端'
             : '等待浏览器授权回调';
     final body = isError
         ? (queryError ??
@@ -1593,7 +1645,9 @@ class _OAuthStatusCard extends StatelessWidget {
                 ? current!.error
                 : '官方授权返回失败，请重新生成链接。'))
         : isDone
-            ? '后端已经收到 OAuth 回调。下一步会接入 token 交换和邮件同步，完成后会创建真实邮箱账号。'
+            ? isCompleted
+                ? '后端已经完成 token 交换并创建账号。点击完成关闭窗口。'
+                : '后端已经收到 OAuth 回调，正在交换 token 并创建账号。'
             : '授权链接已复制。请在浏览器打开链接并完成登录，这里会自动更新状态。';
     final background = isError
         ? scheme.errorContainer.withOpacity(0.72)

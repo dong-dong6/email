@@ -138,12 +138,14 @@ type Rule struct {
 }
 
 type Settings struct {
-	RemoteImagesDefault bool     `json:"remote_images_default"`
-	Density             string   `json:"density"`
-	SignatureHTML       string   `json:"signature_html"`
-	GmailClientID       string   `json:"gmail_client_id,omitempty"`
-	MicrosoftClientID   string   `json:"microsoft_client_id,omitempty"`
-	AllowedOrigins      []string `json:"allowed_origins"`
+	RemoteImagesDefault   bool     `json:"remote_images_default"`
+	Density               string   `json:"density"`
+	SignatureHTML         string   `json:"signature_html"`
+	GmailClientID         string   `json:"gmail_client_id,omitempty"`
+	GmailClientSecret     string   `json:"gmail_client_secret,omitempty"`
+	MicrosoftClientID     string   `json:"microsoft_client_id,omitempty"`
+	MicrosoftClientSecret string   `json:"microsoft_client_secret,omitempty"`
+	AllowedOrigins        []string `json:"allowed_origins"`
 }
 
 type Event struct {

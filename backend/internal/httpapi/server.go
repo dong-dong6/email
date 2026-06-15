@@ -272,6 +272,10 @@ func (s *Server) oauthStart(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, errors.New("请先填写 Gmail OAuth Client ID"))
 			return
 		}
+		if strings.TrimSpace(settings.GmailClientSecret) == "" {
+			writeError(w, http.StatusBadRequest, errors.New("请先填写 Gmail OAuth Client Secret"))
+			return
+		}
 		redirectURI := callbackURL(baseURL, "/api/v1/oauth/gmail/callback")
 		s.saveOAuthSession(state, provider, redirectURI)
 		writeJSON(w, http.StatusOK, map[string]string{
@@ -283,6 +287,10 @@ func (s *Server) oauthStart(w http.ResponseWriter, r *http.Request) {
 	case model.ProviderOutlook:
 		if strings.TrimSpace(settings.MicrosoftClientID) == "" {
 			writeError(w, http.StatusBadRequest, errors.New("请先填写 Microsoft OAuth Client ID"))
+			return
+		}
+		if strings.TrimSpace(settings.MicrosoftClientSecret) == "" {
+			writeError(w, http.StatusBadRequest, errors.New("请先填写 Microsoft OAuth Client Secret"))
 			return
 		}
 		redirectURI := callbackURL(baseURL, "/api/v1/oauth/outlook/callback")
@@ -338,9 +346,26 @@ func (s *Server) oauthCallback(provider string) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, errors.New("missing oauth code"))
 			return
 		}
-		session := s.markOAuthSession(state, model.Provider(provider), "callback_received", "")
-		s.publishOAuthEvent("oauth.callback_received", session)
-		writeOAuthHTML(w, "授权已返回后端", provider+" OAuth 回调已收到，客户端会自动显示当前状态。", "下一步会接入 token 交换和官方邮件 API 同步。现在可以关闭这个页面。")
+		session, ok := s.getOAuthSession(state)
+		if !ok {
+			session = s.markOAuthSession(state, model.Provider(provider), "error", "授权状态已失效，请回到客户端重新生成授权链接")
+			s.publishOAuthEvent("oauth.failed", session)
+			writeOAuthHTML(w, "授权状态已失效", "后端找不到这次 OAuth state。", "请回到客户端重新生成授权链接。")
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
+		defer cancel()
+		account, err := s.completeOAuth(ctx, model.Provider(provider), code, session.RedirectURI)
+		if err != nil {
+			session = s.markOAuthSession(state, model.Provider(provider), "error", err.Error())
+			s.publishOAuthEvent("oauth.failed", session)
+			writeOAuthHTML(w, "授权绑定失败", err.Error(), "请回到客户端检查 Client ID / Secret 和回调地址后重新生成授权链接。")
+			return
+		}
+		session = s.completeOAuthSession(state, account)
+		s.broker.Publish(model.Event{Type: "account.created", AccountID: account.ID, Payload: account})
+		s.publishOAuthEvent("oauth.completed", session)
+		writeOAuthHTML(w, "邮箱绑定完成", account.Email+" 已成功绑定到后端。", "客户端会自动刷新账号列表，现在可以关闭这个页面。")
 	}
 }
 
@@ -387,6 +412,20 @@ func (s *Server) markOAuthSession(state string, provider model.Provider, status 
 	return session
 }
 
+func (s *Server) completeOAuthSession(state string, account model.Account) oauthSession {
+	now := time.Now().UTC()
+	s.oauthMu.Lock()
+	defer s.oauthMu.Unlock()
+	session := s.oauthSessions[state]
+	session.Status = "completed"
+	session.Error = ""
+	session.AccountID = account.ID
+	session.Email = account.Email
+	session.UpdatedAt = now
+	s.oauthSessions[state] = session
+	return session
+}
+
 func (s *Server) publishOAuthEvent(eventType string, session oauthSession) {
 	s.broker.Publish(model.Event{
 		Type: eventType,
@@ -402,6 +441,146 @@ func (s *Server) publishOAuthEvent(eventType string, session oauthSession) {
 func writeOAuthHTML(w http.ResponseWriter, title string, body string, hint string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = fmt.Fprintf(w, `<!doctype html><meta charset="utf-8"><title>邮箱授权</title><body style="font-family:system-ui,sans-serif;padding:32px;line-height:1.6"><h1>%s</h1><p>%s</p><p>%s</p></body>`, html.EscapeString(title), html.EscapeString(body), html.EscapeString(hint))
+}
+
+type oauthToken struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token,omitempty"`
+	TokenType    string `json:"token_type,omitempty"`
+	Scope        string `json:"scope,omitempty"`
+	ExpiresIn    int    `json:"expires_in,omitempty"`
+	ExpiresAt    int64  `json:"expires_at"`
+}
+
+func (s *Server) completeOAuth(ctx context.Context, provider model.Provider, code string, redirectURI string) (model.Account, error) {
+	settings := s.db.Settings()
+	var clientID, clientSecret, tokenURL string
+	switch provider {
+	case model.ProviderGmail:
+		clientID = strings.TrimSpace(settings.GmailClientID)
+		clientSecret = strings.TrimSpace(settings.GmailClientSecret)
+		tokenURL = "https://oauth2.googleapis.com/token"
+	case model.ProviderOutlook:
+		clientID = strings.TrimSpace(settings.MicrosoftClientID)
+		clientSecret = strings.TrimSpace(settings.MicrosoftClientSecret)
+		tokenURL = "https://login.microsoftonline.com/consumers/oauth2/v2.0/token"
+	default:
+		return model.Account{}, errors.New("unsupported oauth provider")
+	}
+	if clientID == "" || clientSecret == "" {
+		return model.Account{}, errors.New("OAuth Client ID 和 Client Secret 都必须填写")
+	}
+	token, err := exchangeOAuthToken(ctx, tokenURL, clientID, clientSecret, code, redirectURI)
+	if err != nil {
+		return model.Account{}, err
+	}
+	email, displayName, err := fetchOAuthProfile(ctx, provider, token.AccessToken)
+	if err != nil {
+		return model.Account{}, err
+	}
+	tokenJSON, err := json.Marshal(token)
+	if err != nil {
+		return model.Account{}, err
+	}
+	account := s.db.CreateAccount(model.Account{
+		Provider:    provider,
+		Email:       email,
+		DisplayName: firstNonEmpty(displayName, email),
+		Username:    email,
+		Password:    string(tokenJSON),
+		Status:      model.AccountActive,
+	})
+	return account, nil
+}
+
+func exchangeOAuthToken(ctx context.Context, tokenURL string, clientID string, clientSecret string, code string, redirectURI string) (oauthToken, error) {
+	values := url.Values{}
+	values.Set("client_id", clientID)
+	values.Set("client_secret", clientSecret)
+	values.Set("code", code)
+	values.Set("grant_type", "authorization_code")
+	values.Set("redirect_uri", redirectURI)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL, strings.NewReader(values.Encode()))
+	if err != nil {
+		return oauthToken{}, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return oauthToken{}, fmt.Errorf("交换 OAuth token 失败: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return oauthToken{}, fmt.Errorf("交换 OAuth token 失败: %s", strings.TrimSpace(string(body)))
+	}
+	var token oauthToken
+	if err := json.Unmarshal(body, &token); err != nil {
+		return oauthToken{}, fmt.Errorf("解析 OAuth token 失败: %w", err)
+	}
+	if token.AccessToken == "" {
+		return oauthToken{}, errors.New("OAuth token 响应缺少 access_token")
+	}
+	if token.ExpiresIn > 0 {
+		token.ExpiresAt = time.Now().Add(time.Duration(token.ExpiresIn) * time.Second).Unix()
+	}
+	return token, nil
+}
+
+func fetchOAuthProfile(ctx context.Context, provider model.Provider, accessToken string) (string, string, error) {
+	var profileURL string
+	switch provider {
+	case model.ProviderGmail:
+		profileURL = "https://gmail.googleapis.com/gmail/v1/users/me/profile"
+	case model.ProviderOutlook:
+		profileURL = "https://graph.microsoft.com/v1.0/me"
+	default:
+		return "", "", errors.New("unsupported oauth provider")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, profileURL, nil)
+	if err != nil {
+		return "", "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", "", fmt.Errorf("读取邮箱账号信息失败: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", "", fmt.Errorf("读取邮箱账号信息失败: %s", strings.TrimSpace(string(body)))
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return "", "", fmt.Errorf("解析邮箱账号信息失败: %w", err)
+	}
+	email := stringValue(raw, "emailAddress")
+	if email == "" {
+		email = stringValue(raw, "mail")
+	}
+	if email == "" {
+		email = stringValue(raw, "userPrincipalName")
+	}
+	displayName := stringValue(raw, "displayName")
+	if email == "" {
+		return "", "", errors.New("官方 API 未返回邮箱地址")
+	}
+	return email, displayName, nil
+}
+
+func stringValue(raw map[string]any, key string) string {
+	value, _ := raw[key].(string)
+	return strings.TrimSpace(value)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func gmailAuthURL(clientID, redirectURI, state string) string {

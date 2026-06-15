@@ -1,7 +1,7 @@
 package config
 
 import (
-	"crypto/sha256"
+	"crypto/rand"
 	"encoding/base64"
 	"errors"
 	"os"
@@ -42,7 +42,7 @@ func Load() (Config, error) {
 	}
 	cfg.BlobDir = getenv("BLOB_DIR", filepath.Join(cfg.DataDir, "blobs"))
 
-	key, err := loadMasterKey(cfg.Env)
+	key, err := loadMasterKey(cfg.DataDir)
 	if err != nil {
 		return Config{}, err
 	}
@@ -69,14 +69,10 @@ func splitCSV(value string) []string {
 	return out
 }
 
-func loadMasterKey(env string) ([]byte, error) {
+func loadMasterKey(dataDir string) ([]byte, error) {
 	raw := strings.TrimSpace(os.Getenv("MASTER_KEY_BASE64"))
 	if raw == "" {
-		if env == "production" {
-			return nil, errors.New("MASTER_KEY_BASE64 is required in production")
-		}
-		sum := sha256.Sum256([]byte("development-only-master-key"))
-		return sum[:], nil
+		return loadOrCreateMasterKeyFile(dataDir)
 	}
 	key, err := base64.StdEncoding.DecodeString(raw)
 	if err != nil {
@@ -84,6 +80,34 @@ func loadMasterKey(env string) ([]byte, error) {
 	}
 	if len(key) != 32 {
 		return nil, errors.New("MASTER_KEY_BASE64 must decode to 32 bytes")
+	}
+	return key, nil
+}
+
+func loadOrCreateMasterKeyFile(dataDir string) ([]byte, error) {
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		return nil, err
+	}
+	path := filepath.Join(dataDir, "master.key")
+	if data, err := os.ReadFile(path); err == nil {
+		key, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(data)))
+		if err != nil {
+			return nil, err
+		}
+		if len(key) != 32 {
+			return nil, errors.New("stored master key must decode to 32 bytes")
+		}
+		return key, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		return nil, err
+	}
+	encoded := base64.StdEncoding.EncodeToString(key)
+	if err := os.WriteFile(path, []byte(encoded+"\n"), 0o600); err != nil {
+		return nil, err
 	}
 	return key, nil
 }

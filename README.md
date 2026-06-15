@@ -30,12 +30,10 @@ flutter run -d chrome --dart-define=API_BASE_URL=http://localhost:8080
 VPS 部署：
 
 ```bash
-cp .env.example .env
-# 修改 .env 中的域名、密钥、密码
 docker compose up -d --build
 ```
 
-默认会把 Go 后端直接暴露在 `http://服务器IP:8080`，客户端登录页填写这个服务地址即可。
+默认会把 Go 后端直接暴露在 `http://服务器IP:8080`，客户端登录页填写这个服务地址即可。需要改端口或公开地址时再复制 `.env.example` 为 `.env`。
 
 ## 添加真实邮箱
 
@@ -47,11 +45,6 @@ docker compose up -d --build
 
 添加后后端会立即执行一次 INBOX 初始同步，之后可以点客户端同步按钮再次拉取最近邮件。发信走后端 `/api/v1/send`，客户端不会直连 SMTP。
 
-## 默认开发账号
+## 首次启动
 
-开发环境默认：
-
-- 邮箱：`owner@example.com`
-- 密码：`change-me-now`
-
-生产环境必须设置 `MASTER_KEY_BASE64`，并修改 owner 密码。
+全新服务第一次打开客户端时，只需要填写服务地址。客户端会检测到后端还没有管理员用户，然后进入创建管理员账户流程。加密主密钥会在服务端数据卷中自动生成并保存为 `master.key`，不要删除或替换这个数据卷。

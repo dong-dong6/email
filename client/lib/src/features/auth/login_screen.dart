@@ -21,6 +21,8 @@ class _LoginScreenState extends State<LoginScreen> {
   final _cacheService = ServerCacheService();
   List<ServerConfig> _savedServers = [];
   bool _isRegistering = false;
+  bool _serverChecked = false;
+  String _checkedServerUrl = '';
   bool _checkingServer = false;
 
   @override
@@ -57,12 +59,21 @@ class _LoginScreenState extends State<LoginScreen> {
     final url = value.trim();
     if (url.isEmpty) return;
 
-    setState(() => _checkingServer = true);
+    setState(() {
+      _checkingServer = true;
+      _serverChecked = false;
+      _checkedServerUrl = '';
+      _isRegistering = false;
+    });
     await widget.state.checkServer(url);
     if (mounted) {
       setState(() {
         _checkingServer = false;
-        _isRegistering = widget.state.needsRegistration;
+        if (widget.state.error == null) {
+          _serverChecked = true;
+          _checkedServerUrl = url;
+          _isRegistering = widget.state.needsRegistration;
+        }
       });
     }
   }
@@ -70,6 +81,10 @@ class _LoginScreenState extends State<LoginScreen> {
   Future<void> _submit() async {
     final serverUrl = _server.text.trim();
     if (serverUrl.isEmpty) return;
+    if (!_serverChecked || _checkedServerUrl != serverUrl) {
+      await _onServerChanged(serverUrl);
+      return;
+    }
 
     if (_isRegistering) {
       if (_password.text != _confirmPassword.text) {
@@ -130,7 +145,11 @@ class _LoginScreenState extends State<LoginScreen> {
                         style: Theme.of(context).textTheme.headlineSmall),
                     const SizedBox(height: 8),
                     Text(
-                      _isRegistering ? '创建管理员账户' : '连接你的 VPS 邮箱后端',
+                      !_serverChecked
+                          ? '连接你的 VPS 邮箱后端'
+                          : _isRegistering
+                              ? '创建管理员账户'
+                              : '登录管理员账户',
                       textAlign: TextAlign.center,
                       style: TextStyle(color: scheme.onSurfaceVariant),
                     ),
@@ -140,57 +159,31 @@ class _LoginScreenState extends State<LoginScreen> {
                       const SizedBox(height: 8),
                       _buildSavedServers(),
                     ],
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: _email,
-                      autofillHints: const [AutofillHints.username],
-                      decoration: const InputDecoration(
-                          prefixIcon: Icon(Icons.person_outline),
-                          labelText: '邮箱'),
+                    AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 180),
+                      child: _serverChecked
+                          ? _buildCredentialsFields()
+                          : const SizedBox.shrink(),
                     ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: _password,
-                      obscureText: true,
-                      autofillHints: const [AutofillHints.password],
-                      decoration: const InputDecoration(
-                          prefixIcon: Icon(Icons.lock_outline),
-                          labelText: '密码'),
-                      onSubmitted: (_) => _submit(),
-                    ),
-                    if (_isRegistering) ...[
-                      const SizedBox(height: 12),
-                      TextField(
-                        controller: _confirmPassword,
-                        obscureText: true,
-                        decoration: const InputDecoration(
-                            prefixIcon: Icon(Icons.lock_outline),
-                            labelText: '确认密码'),
-                        onSubmitted: (_) => _submit(),
-                      ),
-                    ],
-                    if (!_isRegistering) ...[
-                      const SizedBox(height: 12),
-                      TextField(
-                        controller: _totp,
-                        keyboardType: TextInputType.number,
-                        decoration: const InputDecoration(
-                            prefixIcon: Icon(Icons.pin_outlined),
-                            labelText: 'TOTP，可选'),
-                        onSubmitted: (_) => _submit(),
-                      ),
-                    ],
                     const SizedBox(height: 20),
                     FilledButton.icon(
-                      onPressed: widget.state.isLoading ? null : _submit,
-                      icon: widget.state.isLoading
+                      onPressed: widget.state.isLoading || _checkingServer
+                          ? null
+                          : _submit,
+                      icon: widget.state.isLoading || _checkingServer
                           ? const SizedBox.square(
                               dimension: 18,
                               child: CircularProgressIndicator(strokeWidth: 2))
-                          : Icon(_isRegistering
-                              ? Icons.person_add
-                              : Icons.login_rounded),
-                      label: Text(_isRegistering ? '注册' : '登录'),
+                          : Icon(!_serverChecked
+                              ? Icons.arrow_forward_rounded
+                              : _isRegistering
+                                  ? Icons.person_add
+                                  : Icons.login_rounded),
+                      label: Text(!_serverChecked
+                          ? '继续'
+                          : _isRegistering
+                              ? '注册'
+                              : '登录'),
                     ),
                     if (widget.state.error != null) ...[
                       const SizedBox(height: 12),
@@ -227,6 +220,60 @@ class _LoginScreenState extends State<LoginScreen> {
             : null,
       ),
       onSubmitted: (_) => _onServerChanged(_server.text),
+      onChanged: (value) {
+        final url = value.trim();
+        if (_serverChecked && url != _checkedServerUrl) {
+          setState(() {
+            _serverChecked = false;
+            _checkedServerUrl = '';
+            _isRegistering = false;
+          });
+        }
+      },
+    );
+  }
+
+  Widget _buildCredentialsFields() {
+    return Column(
+      key: ValueKey(_isRegistering ? 'register' : 'login'),
+      children: [
+        const SizedBox(height: 12),
+        TextField(
+          controller: _email,
+          autofillHints: const [AutofillHints.username],
+          decoration: InputDecoration(
+              prefixIcon: const Icon(Icons.person_outline),
+              labelText: _isRegistering ? '管理员邮箱' : '邮箱'),
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _password,
+          obscureText: true,
+          autofillHints: const [AutofillHints.password],
+          decoration: const InputDecoration(
+              prefixIcon: Icon(Icons.lock_outline), labelText: '密码'),
+          onSubmitted: (_) => _submit(),
+        ),
+        if (_isRegistering) ...[
+          const SizedBox(height: 12),
+          TextField(
+            controller: _confirmPassword,
+            obscureText: true,
+            decoration: const InputDecoration(
+                prefixIcon: Icon(Icons.lock_outline), labelText: '确认密码'),
+            onSubmitted: (_) => _submit(),
+          ),
+        ] else ...[
+          const SizedBox(height: 12),
+          TextField(
+            controller: _totp,
+            keyboardType: TextInputType.number,
+            decoration: const InputDecoration(
+                prefixIcon: Icon(Icons.pin_outlined), labelText: 'TOTP，可选'),
+            onSubmitted: (_) => _submit(),
+          ),
+        ],
+      ],
     );
   }
 

@@ -68,7 +68,7 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/api/v1/snapshot", s.requireAuth(http.HandlerFunc(s.snapshot)))
 	mux.Handle("/api/v1/accounts", s.requireAuth(http.HandlerFunc(s.accounts)))
 	mux.Handle("/api/v1/accounts/oauth/start", s.requireAuth(http.HandlerFunc(s.oauthStart)))
-	mux.Handle("/api/v1/accounts/oauth/status", s.requireAuth(http.HandlerFunc(s.oauthStatus)))
+	mux.HandleFunc("/api/v1/accounts/oauth/status", s.oauthStatus)
 	mux.HandleFunc("/api/v1/oauth/gmail/callback", s.oauthCallback("gmail"))
 	mux.HandleFunc("/api/v1/oauth/outlook/callback", s.oauthCallback("outlook"))
 	mux.Handle("/api/v1/accounts/", s.requireAuth(http.HandlerFunc(s.accountByID)))

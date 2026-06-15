@@ -1032,6 +1032,7 @@ class _AddAccountDialogState extends State<_AddAccountDialog> {
   OAuthStart? _oauthStart;
   OAuthStatus? _oauthStatus;
   Timer? _oauthPoller;
+  String? _oauthStatusError;
   String? _formError;
 
   @override
@@ -1090,6 +1091,7 @@ class _AddAccountDialogState extends State<_AddAccountDialog> {
                   provider: _provider,
                   oauthStart: _oauthStart,
                   oauthStatus: _oauthStatus,
+                  oauthStatusError: _oauthStatusError,
                   clientIdController: _provider == 'gmail'
                       ? _gmailClientId
                       : _microsoftClientId,
@@ -1260,6 +1262,7 @@ class _AddAccountDialogState extends State<_AddAccountDialog> {
         _formError = null;
         _oauthStart = null;
         _oauthStatus = null;
+        _oauthStatusError = null;
       });
       _oauthPoller?.cancel();
       final current =
@@ -1300,6 +1303,7 @@ class _AddAccountDialogState extends State<_AddAccountDialog> {
           provider: oauth.provider,
           status: 'pending',
         );
+        _oauthStatusError = null;
       });
       _startOAuthPolling(oauth.state);
       return;
@@ -1369,6 +1373,7 @@ class _AddAccountDialogState extends State<_AddAccountDialog> {
       _formError = null;
       _oauthStart = null;
       _oauthStatus = null;
+      _oauthStatusError = null;
       switch (provider) {
         case 'gmail':
         case 'outlook':
@@ -1405,16 +1410,27 @@ class _AddAccountDialogState extends State<_AddAccountDialog> {
   }
 
   Future<void> _checkOAuthStatus(String state) async {
-    final status = await widget.state.fetchOAuthStatus(state);
-    if (!mounted || status == null) {
+    try {
+      final status = await widget.state.getOAuthStatus(state);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _oauthStatus = status;
+        _oauthStatusError = null;
+      });
+      if (status.isTerminal) {
+        _oauthPoller?.cancel();
+      }
+      if (status.status == 'callback_received') {
+        widget.state.reload();
+      }
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() => _oauthStatusError = error.toString());
       return;
-    }
-    setState(() => _oauthStatus = status);
-    if (status.isTerminal) {
-      _oauthPoller?.cancel();
-    }
-    if (status.status == 'callback_received') {
-      widget.state.reload();
     }
   }
 
@@ -1432,6 +1448,7 @@ class _OAuthProviderPanel extends StatelessWidget {
     required this.provider,
     required this.oauthStart,
     required this.oauthStatus,
+    required this.oauthStatusError,
     required this.clientIdController,
     required this.onCopy,
   });
@@ -1439,6 +1456,7 @@ class _OAuthProviderPanel extends StatelessWidget {
   final String provider;
   final OAuthStart? oauthStart;
   final OAuthStatus? oauthStatus;
+  final String? oauthStatusError;
   final TextEditingController clientIdController;
   final VoidCallback onCopy;
 
@@ -1527,7 +1545,7 @@ class _OAuthProviderPanel extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 8),
-          _OAuthStatusCard(status: oauthStatus),
+          _OAuthStatusCard(status: oauthStatus, error: oauthStatusError),
           const SizedBox(height: 8),
           Align(
             alignment: Alignment.centerRight,
@@ -1544,15 +1562,17 @@ class _OAuthProviderPanel extends StatelessWidget {
 }
 
 class _OAuthStatusCard extends StatelessWidget {
-  const _OAuthStatusCard({required this.status});
+  const _OAuthStatusCard({required this.status, required this.error});
 
   final OAuthStatus? status;
+  final String? error;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final current = status;
-    final isError = current?.status == 'error';
+    final queryError = error;
+    final isError = current?.status == 'error' || queryError != null;
     final isDone = current?.status == 'callback_received' ||
         current?.status == 'completed';
     final icon = isError
@@ -1561,14 +1581,17 @@ class _OAuthStatusCard extends StatelessWidget {
             ? Icons.task_alt_rounded
             : Icons.hourglass_top_rounded;
     final title = isError
-        ? '授权失败'
+        ? current?.status == 'error'
+            ? '授权失败'
+            : '状态查询失败'
         : isDone
             ? '浏览器授权已返回后端'
             : '等待浏览器授权回调';
     final body = isError
-        ? (current?.error.isNotEmpty == true
-            ? current!.error
-            : '官方授权返回失败，请重新生成链接。')
+        ? (queryError ??
+            (current?.error.isNotEmpty == true
+                ? current!.error
+                : '官方授权返回失败，请重新生成链接。'))
         : isDone
             ? '后端已经收到 OAuth 回调。下一步会接入 token 交换和邮件同步，完成后会创建真实邮箱账号。'
             : '授权链接已复制。请在浏览器打开链接并完成登录，这里会自动更新状态。';

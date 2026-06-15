@@ -183,6 +183,14 @@ class AppState extends ChangeNotifier {
     return result;
   }
 
+  Future<OAuthStatus?> fetchOAuthStatus(String state) async {
+    try {
+      return await api.oauthStatus(state);
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<void> updateSettings(MailSettings settings) async {
     await _run(() async {
       final updated = await api.updateSettings(settings);

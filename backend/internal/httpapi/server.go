@@ -7,12 +7,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"email/backend/internal/auth"
@@ -31,10 +33,25 @@ type Server struct {
 	blobs    *blob.Store
 	registry *mail.Registry
 	broker   *events.Broker
+
+	oauthMu       sync.RWMutex
+	oauthSessions map[string]oauthSession
 }
 
 func NewServer(cfg config.Config, authSvc *auth.Service, db *store.Memory, blobs *blob.Store, registry *mail.Registry, broker *events.Broker) *Server {
-	return &Server{cfg: cfg, auth: authSvc, db: db, blobs: blobs, registry: registry, broker: broker}
+	return &Server{cfg: cfg, auth: authSvc, db: db, blobs: blobs, registry: registry, broker: broker, oauthSessions: map[string]oauthSession{}}
+}
+
+type oauthSession struct {
+	State       string    `json:"state"`
+	Provider    string    `json:"provider"`
+	Status      string    `json:"status"`
+	Error       string    `json:"error,omitempty"`
+	AccountID   string    `json:"account_id,omitempty"`
+	Email       string    `json:"email,omitempty"`
+	RedirectURI string    `json:"redirect_uri,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 func (s *Server) Routes() http.Handler {
@@ -51,6 +68,7 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/api/v1/snapshot", s.requireAuth(http.HandlerFunc(s.snapshot)))
 	mux.Handle("/api/v1/accounts", s.requireAuth(http.HandlerFunc(s.accounts)))
 	mux.Handle("/api/v1/accounts/oauth/start", s.requireAuth(http.HandlerFunc(s.oauthStart)))
+	mux.Handle("/api/v1/accounts/oauth/status", s.requireAuth(http.HandlerFunc(s.oauthStatus)))
 	mux.HandleFunc("/api/v1/oauth/gmail/callback", s.oauthCallback("gmail"))
 	mux.HandleFunc("/api/v1/oauth/outlook/callback", s.oauthCallback("outlook"))
 	mux.Handle("/api/v1/accounts/", s.requireAuth(http.HandlerFunc(s.accountByID)))
@@ -255,6 +273,7 @@ func (s *Server) oauthStart(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		redirectURI := callbackURL(baseURL, "/api/v1/oauth/gmail/callback")
+		s.saveOAuthSession(state, provider, redirectURI)
 		writeJSON(w, http.StatusOK, map[string]string{
 			"provider":     string(provider),
 			"state":        state,
@@ -267,6 +286,7 @@ func (s *Server) oauthStart(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		redirectURI := callbackURL(baseURL, "/api/v1/oauth/outlook/callback")
+		s.saveOAuthSession(state, provider, redirectURI)
 		writeJSON(w, http.StatusOK, map[string]string{
 			"provider":     string(provider),
 			"state":        state,
@@ -278,16 +298,110 @@ func (s *Server) oauthStart(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Server) oauthStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	state := strings.TrimSpace(r.URL.Query().Get("state"))
+	if state == "" {
+		writeError(w, http.StatusBadRequest, errors.New("missing oauth state"))
+		return
+	}
+	session, ok := s.getOAuthSession(state)
+	if !ok {
+		writeError(w, http.StatusNotFound, errors.New("oauth state not found"))
+		return
+	}
+	writeJSON(w, http.StatusOK, session)
+}
+
 func (s *Server) oauthCallback(provider string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		state := strings.TrimSpace(r.URL.Query().Get("state"))
+		if state == "" {
+			writeError(w, http.StatusBadRequest, errors.New("missing oauth state"))
+			return
+		}
+		if errorCode := strings.TrimSpace(r.URL.Query().Get("error")); errorCode != "" {
+			errorDescription := strings.TrimSpace(r.URL.Query().Get("error_description"))
+			if errorDescription == "" {
+				errorDescription = errorCode
+			}
+			session := s.markOAuthSession(state, model.Provider(provider), "error", errorDescription)
+			s.publishOAuthEvent("oauth.failed", session)
+			writeOAuthHTML(w, "授权失败", provider+" OAuth 返回错误："+errorDescription, "请回到客户端重新生成授权链接。")
+			return
+		}
 		code := strings.TrimSpace(r.URL.Query().Get("code"))
 		if code == "" {
 			writeError(w, http.StatusBadRequest, errors.New("missing oauth code"))
 			return
 		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write([]byte(`<!doctype html><meta charset="utf-8"><title>邮箱授权</title><body style="font-family:system-ui,sans-serif;padding:32px"><h1>授权已返回后端</h1><p>` + provider + ` OAuth 回调已收到。下一步会接入 token 交换和官方邮件 API 同步。</p><p>现在可以关闭这个页面。</p></body>`))
+		session := s.markOAuthSession(state, model.Provider(provider), "callback_received", "")
+		s.publishOAuthEvent("oauth.callback_received", session)
+		writeOAuthHTML(w, "授权已返回后端", provider+" OAuth 回调已收到，客户端会自动显示当前状态。", "下一步会接入 token 交换和官方邮件 API 同步。现在可以关闭这个页面。")
 	}
+}
+
+func (s *Server) saveOAuthSession(state string, provider model.Provider, redirectURI string) {
+	now := time.Now().UTC()
+	s.oauthMu.Lock()
+	defer s.oauthMu.Unlock()
+	s.oauthSessions[state] = oauthSession{
+		State:       state,
+		Provider:    string(provider),
+		Status:      "pending",
+		RedirectURI: redirectURI,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+}
+
+func (s *Server) getOAuthSession(state string) (oauthSession, bool) {
+	s.oauthMu.RLock()
+	defer s.oauthMu.RUnlock()
+	session, ok := s.oauthSessions[state]
+	return session, ok
+}
+
+func (s *Server) markOAuthSession(state string, provider model.Provider, status string, message string) oauthSession {
+	now := time.Now().UTC()
+	s.oauthMu.Lock()
+	defer s.oauthMu.Unlock()
+	session, ok := s.oauthSessions[state]
+	if !ok {
+		session = oauthSession{
+			State:     state,
+			Provider:  string(provider),
+			CreatedAt: now,
+		}
+	}
+	if session.Provider == "" {
+		session.Provider = string(provider)
+	}
+	session.Status = status
+	session.Error = message
+	session.UpdatedAt = now
+	s.oauthSessions[state] = session
+	return session
+}
+
+func (s *Server) publishOAuthEvent(eventType string, session oauthSession) {
+	s.broker.Publish(model.Event{
+		Type: eventType,
+		Payload: map[string]any{
+			"state":    session.State,
+			"provider": session.Provider,
+			"status":   session.Status,
+			"error":    session.Error,
+		},
+	})
+}
+
+func writeOAuthHTML(w http.ResponseWriter, title string, body string, hint string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = fmt.Fprintf(w, `<!doctype html><meta charset="utf-8"><title>邮箱授权</title><body style="font-family:system-ui,sans-serif;padding:32px;line-height:1.6"><h1>%s</h1><p>%s</p><p>%s</p></body>`, html.EscapeString(title), html.EscapeString(body), html.EscapeString(hint))
 }
 
 func gmailAuthURL(clientID, redirectURI, state string) string {

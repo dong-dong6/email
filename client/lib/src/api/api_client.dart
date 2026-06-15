@@ -82,6 +82,13 @@ class ApiClient {
     return OAuthStart.fromJson(response);
   }
 
+  Future<OAuthStatus> oauthStatus(String state) async {
+    final encodedState = Uri.encodeQueryComponent(state);
+    final response =
+        await _json('GET', '/api/v1/accounts/oauth/status?state=$encodedState');
+    return OAuthStatus.fromJson(response);
+  }
+
   Future<MailSettings> updateSettings(MailSettings settings) async {
     final response =
         await _json('PUT', '/api/v1/settings', body: settings.toJson());
@@ -214,6 +221,45 @@ class OAuthStart {
       authUrl: json['auth_url'] as String? ?? '',
       redirectUri: json['redirect_uri'] as String? ?? '',
       state: json['state'] as String? ?? '',
+    );
+  }
+}
+
+class OAuthStatus {
+  const OAuthStatus({
+    required this.state,
+    required this.provider,
+    required this.status,
+    this.error = '',
+    this.accountId = '',
+    this.email = '',
+    this.updatedAt,
+  });
+
+  final String state;
+  final String provider;
+  final String status;
+  final String error;
+  final String accountId;
+  final String email;
+  final DateTime? updatedAt;
+
+  bool get isTerminal =>
+      status == 'callback_received' ||
+      status == 'completed' ||
+      status == 'error';
+
+  factory OAuthStatus.fromJson(Map<String, dynamic> json) {
+    final updatedAtValue = json['updated_at'] as String?;
+    return OAuthStatus(
+      state: json['state'] as String? ?? '',
+      provider: json['provider'] as String? ?? '',
+      status: json['status'] as String? ?? '',
+      error: json['error'] as String? ?? '',
+      accountId: json['account_id'] as String? ?? '',
+      email: json['email'] as String? ?? '',
+      updatedAt:
+          updatedAtValue == null ? null : DateTime.tryParse(updatedAtValue),
     );
   }
 }

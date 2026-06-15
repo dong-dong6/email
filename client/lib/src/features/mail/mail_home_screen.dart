@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:html/dom.dart' as dom;
@@ -1028,10 +1030,13 @@ class _AddAccountDialogState extends State<_AddAccountDialog> {
   bool _smtpTls = true;
   bool _saving = false;
   OAuthStart? _oauthStart;
+  OAuthStatus? _oauthStatus;
+  Timer? _oauthPoller;
   String? _formError;
 
   @override
   void dispose() {
+    _oauthPoller?.cancel();
     _email.dispose();
     _displayName.dispose();
     _username.dispose();
@@ -1084,6 +1089,7 @@ class _AddAccountDialogState extends State<_AddAccountDialog> {
                 _OAuthProviderPanel(
                   provider: _provider,
                   oauthStart: _oauthStart,
+                  oauthStatus: _oauthStatus,
                   clientIdController: _provider == 'gmail'
                       ? _gmailClientId
                       : _microsoftClientId,
@@ -1253,7 +1259,9 @@ class _AddAccountDialogState extends State<_AddAccountDialog> {
         _saving = true;
         _formError = null;
         _oauthStart = null;
+        _oauthStatus = null;
       });
+      _oauthPoller?.cancel();
       final current =
           widget.state.snapshot?.settings ?? MailboxSnapshot.empty().settings;
       await widget.state.updateSettings(
@@ -1287,7 +1295,13 @@ class _AddAccountDialogState extends State<_AddAccountDialog> {
       setState(() {
         _saving = false;
         _oauthStart = oauth;
+        _oauthStatus = OAuthStatus(
+          state: oauth.state,
+          provider: oauth.provider,
+          status: 'pending',
+        );
       });
+      _startOAuthPolling(oauth.state);
       return;
     }
 
@@ -1349,10 +1363,12 @@ class _AddAccountDialogState extends State<_AddAccountDialog> {
   }
 
   void _setProvider(String provider) {
+    _oauthPoller?.cancel();
     setState(() {
       _provider = provider;
       _formError = null;
       _oauthStart = null;
+      _oauthStatus = null;
       switch (provider) {
         case 'gmail':
         case 'outlook':
@@ -1379,6 +1395,29 @@ class _AddAccountDialogState extends State<_AddAccountDialog> {
 
   bool get _isOAuthProvider => _provider == 'gmail' || _provider == 'outlook';
 
+  void _startOAuthPolling(String state) {
+    _oauthPoller?.cancel();
+    _checkOAuthStatus(state);
+    _oauthPoller = Timer.periodic(
+      const Duration(seconds: 2),
+      (_) => _checkOAuthStatus(state),
+    );
+  }
+
+  Future<void> _checkOAuthStatus(String state) async {
+    final status = await widget.state.fetchOAuthStatus(state);
+    if (!mounted || status == null) {
+      return;
+    }
+    setState(() => _oauthStatus = status);
+    if (status.isTerminal) {
+      _oauthPoller?.cancel();
+    }
+    if (status.status == 'callback_received') {
+      widget.state.reload();
+    }
+  }
+
   int? _parsePort(String value) {
     final port = int.tryParse(value.trim());
     if (port == null || port <= 0 || port > 65535) {
@@ -1392,12 +1431,14 @@ class _OAuthProviderPanel extends StatelessWidget {
   const _OAuthProviderPanel({
     required this.provider,
     required this.oauthStart,
+    required this.oauthStatus,
     required this.clientIdController,
     required this.onCopy,
   });
 
   final String provider;
   final OAuthStart? oauthStart;
+  final OAuthStatus? oauthStatus;
   final TextEditingController clientIdController;
   final VoidCallback onCopy;
 
@@ -1486,6 +1527,8 @@ class _OAuthProviderPanel extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 8),
+          _OAuthStatusCard(status: oauthStatus),
+          const SizedBox(height: 8),
           Align(
             alignment: Alignment.centerRight,
             child: TextButton.icon(
@@ -1496,6 +1539,78 @@ class _OAuthProviderPanel extends StatelessWidget {
           ),
         ],
       ],
+    );
+  }
+}
+
+class _OAuthStatusCard extends StatelessWidget {
+  const _OAuthStatusCard({required this.status});
+
+  final OAuthStatus? status;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final current = status;
+    final isError = current?.status == 'error';
+    final isDone = current?.status == 'callback_received' ||
+        current?.status == 'completed';
+    final icon = isError
+        ? Icons.error_outline_rounded
+        : isDone
+            ? Icons.task_alt_rounded
+            : Icons.hourglass_top_rounded;
+    final title = isError
+        ? '授权失败'
+        : isDone
+            ? '浏览器授权已返回后端'
+            : '等待浏览器授权回调';
+    final body = isError
+        ? (current?.error.isNotEmpty == true
+            ? current!.error
+            : '官方授权返回失败，请重新生成链接。')
+        : isDone
+            ? '后端已经收到 OAuth 回调。下一步会接入 token 交换和邮件同步，完成后会创建真实邮箱账号。'
+            : '授权链接已复制。请在浏览器打开链接并完成登录，这里会自动更新状态。';
+    final background = isError
+        ? scheme.errorContainer.withOpacity(0.72)
+        : isDone
+            ? scheme.tertiaryContainer.withOpacity(0.62)
+            : scheme.secondaryContainer.withOpacity(0.52);
+    final foreground = isError
+        ? scheme.onErrorContainer
+        : isDone
+            ? scheme.onTertiaryContainer
+            : scheme.onSecondaryContainer;
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, color: foreground),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                        color: foreground,
+                        fontWeight: FontWeight.w700,
+                      ),
+                ),
+                const SizedBox(height: 4),
+                Text(body, style: TextStyle(color: foreground)),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

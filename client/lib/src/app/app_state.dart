@@ -73,6 +73,7 @@ class AppState extends ChangeNotifier {
   Future<void> checkServer(String apiBaseUrl) async {
     await _run(() async {
       api.setBaseUrl(apiBaseUrl);
+      needsRegistration = false;
       final hasUsers = await api.checkUsers();
       needsRegistration = !hasUsers;
     });
@@ -183,8 +184,11 @@ class AppState extends ChangeNotifier {
   void selectMessage(String id) {
     selectedMessageId = id;
     _patchLocal(id, isRead: true);
-    api.patchMessage(id, isRead: true);
     notifyListeners();
+    api.patchMessage(id, isRead: true).catchError((_) {
+      _patchLocal(id, isRead: false);
+      notifyListeners();
+    });
   }
 
   void setQuery(String value) {
@@ -194,9 +198,48 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> toggleStar(MailMessage message) async {
-    _patchLocal(message.id, isStarred: !message.isStarred);
+    final newValue = !message.isStarred;
+    _patchLocal(message.id, isStarred: newValue);
     notifyListeners();
-    await api.patchMessage(message.id, isStarred: !message.isStarred);
+    try {
+      await api.patchMessage(message.id, isStarred: newValue);
+    } catch (_) {
+      _patchLocal(message.id, isStarred: !newValue);
+      notifyListeners();
+    }
+  }
+
+  Future<void> moveMessage(MailMessage message, String folderId) async {
+    _patchLocal(message.id, folderId: folderId);
+    notifyListeners();
+    try {
+      await api.moveMessage(message.id, folderId);
+      snapshot = await api.snapshot();
+    } catch (_) {
+      _patchLocal(message.id, folderId: message.folderId);
+      notifyListeners();
+    }
+  }
+
+  Future<void> deleteMessage(MailMessage message) async {
+    final current = snapshot;
+    if (current == null) return;
+    snapshot = MailboxSnapshot(
+      accounts: current.accounts,
+      folders: current.folders,
+      messages: current.messages.where((m) => m.id != message.id).toList(),
+      settings: current.settings,
+    );
+    if (selectedMessageId == message.id) {
+      selectedMessageId = visibleMessages.firstOrNull?.id;
+    }
+    notifyListeners();
+    try {
+      await api.deleteMessage(message.id);
+    } catch (_) {
+      snapshot = current;
+      notifyListeners();
+    }
   }
 
   Future<void> syncSelectedAccount() async {
@@ -221,6 +264,8 @@ class AppState extends ChangeNotifier {
   }) async {
     final account = accounts.firstOrNull;
     if (account == null) {
+      error = '请先添加邮箱账户';
+      notifyListeners();
       return;
     }
     await _run(() async {
@@ -244,7 +289,8 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  void _patchLocal(String id, {bool? isRead, bool? isStarred}) {
+  void _patchLocal(String id,
+      {bool? isRead, bool? isStarred, String? folderId}) {
     final current = snapshot;
     if (current == null) {
       return;
@@ -254,7 +300,8 @@ class AppState extends ChangeNotifier {
       folders: current.folders,
       messages: current.messages
           .map((message) => message.id == id
-              ? message.copyWith(isRead: isRead, isStarred: isStarred)
+              ? message.copyWith(
+                  isRead: isRead, isStarred: isStarred, folderId: folderId)
               : message)
           .toList(),
       settings: current.settings,

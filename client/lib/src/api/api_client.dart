@@ -122,13 +122,21 @@ class ApiClient {
     await _json('POST', '/api/v1/accounts/$accountId/sync');
   }
 
+  Future<void> moveMessage(String id, String folderId) async {
+    if (offlineMode) return;
+    await _json('POST', '/api/v1/messages/$id/move', body: {
+      'folder_id': folderId,
+    });
+  }
+
+  Future<void> deleteMessage(String id) async {
+    if (offlineMode) return;
+    await _json('DELETE', '/api/v1/messages/$id');
+  }
+
   Future<bool> checkUsers() async {
-    try {
-      final response = await _json('GET', '/api/v1/auth/check', auth: false);
-      return response['has_users'] as bool? ?? true;
-    } catch (_) {
-      return true;
-    }
+    final response = await _json('GET', '/api/v1/auth/check', auth: false);
+    return response['has_users'] as bool? ?? true;
   }
 
   Future<void> register(String email, String password) async {

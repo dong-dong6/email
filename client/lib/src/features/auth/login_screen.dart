@@ -186,8 +186,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       icon: widget.state.isLoading
                           ? const SizedBox.square(
                               dimension: 18,
-                              child:
-                                  CircularProgressIndicator(strokeWidth: 2))
+                              child: CircularProgressIndicator(strokeWidth: 2))
                           : Icon(_isRegistering
                               ? Icons.person_add
                               : Icons.login_rounded),

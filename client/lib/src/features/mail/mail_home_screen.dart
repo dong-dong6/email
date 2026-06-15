@@ -524,6 +524,38 @@ class _MessageDetail extends StatelessWidget {
                       : Icons.star_outline_rounded),
                 ),
               ),
+              PopupMenuButton<String>(
+                tooltip: '更多操作',
+                icon: const Icon(Icons.more_vert_rounded),
+                onSelected: (value) {
+                  if (value == 'delete') {
+                    state.deleteMessage(message);
+                  } else if (value.startsWith('move:')) {
+                    state.moveMessage(message, value.substring(5));
+                  }
+                },
+                itemBuilder: (context) => [
+                  const PopupMenuItem(
+                    value: 'delete',
+                    child: ListTile(
+                      leading: Icon(Icons.delete_outline_rounded),
+                      title: Text('删除'),
+                      dense: true,
+                    ),
+                  ),
+                  const PopupMenuDivider(),
+                  ...state.folders
+                      .where((f) => f.id != message.folderId)
+                      .map((folder) => PopupMenuItem(
+                            value: 'move:${folder.id}',
+                            child: ListTile(
+                              leading: Icon(_folderIcon(folder.role)),
+                              title: Text('移到 ${folder.name}'),
+                              dense: true,
+                            ),
+                          )),
+                ],
+              ),
             ],
           ),
         ),
@@ -869,6 +901,20 @@ class _ComposeDialogState extends State<_ComposeDialog> {
                         label: Text('内联图片')),
                   ],
                 ),
+                ListenableBuilder(
+                  listenable: widget.state,
+                  builder: (context, _) {
+                    if (widget.state.error != null) {
+                      return Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: Text(widget.state.error!,
+                            style: TextStyle(
+                                color: Theme.of(context).colorScheme.error)),
+                      );
+                    }
+                    return const SizedBox.shrink();
+                  },
+                ),
               ],
             ),
           ),
@@ -891,7 +937,11 @@ class _ComposeDialogState extends State<_ComposeDialog> {
     await widget.state.sendMessage(
         to: recipients, subject: _subject.text.trim(), body: _body.text);
     if (mounted) {
-      Navigator.of(context).pop();
+      if (widget.state.error == null) {
+        Navigator.of(context).pop();
+      } else {
+        setState(() => _sending = false);
+      }
     }
   }
 }

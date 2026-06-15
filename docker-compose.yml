@@ -36,7 +36,8 @@ services:
     volumes:
       - mail-data:/data
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
 
   postgres:

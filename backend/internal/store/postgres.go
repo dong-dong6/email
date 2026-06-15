@@ -71,7 +71,7 @@ func (p *Postgres) SeedDemo(ctx context.Context) error {
 	from, _ := json.Marshal(model.Address{Name: "Email System", Email: "system@example.com"})
 	to, _ := json.Marshal([]model.Address{{Name: "Owner", Email: "owner@example.com"}})
 	_, err = p.pool.Exec(ctx, `
-		INSERT INTO messages (id, account_id, folder_id, thread_id, provider_id, sender, recipients, subject, snippet, body_text, body_html, received_at, is_read, labels, created_at, updated_at)
+		INSERT INTO messages (id, account_id, folder_id, thread_id, provider_id, sender, recipients, subject, snippet, body_text_ref, body_html_ref, received_at, is_read, labels, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 	`, "msg_welcome", "acc_demo", "fld_inbox", "thr_welcome", "demo-1",
 		from, to, "欢迎使用自托管邮箱",

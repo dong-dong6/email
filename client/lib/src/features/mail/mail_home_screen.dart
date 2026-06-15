@@ -1017,6 +1017,8 @@ class _AddAccountDialogState extends State<_AddAccountDialog> {
   final _displayName = TextEditingController();
   final _username = TextEditingController();
   final _password = TextEditingController();
+  final _gmailClientId = TextEditingController();
+  final _microsoftClientId = TextEditingController();
   final _imapHost = TextEditingController();
   final _imapPort = TextEditingController(text: '993');
   final _smtpHost = TextEditingController();
@@ -1034,11 +1036,21 @@ class _AddAccountDialogState extends State<_AddAccountDialog> {
     _displayName.dispose();
     _username.dispose();
     _password.dispose();
+    _gmailClientId.dispose();
+    _microsoftClientId.dispose();
     _imapHost.dispose();
     _imapPort.dispose();
     _smtpHost.dispose();
     _smtpPort.dispose();
     super.dispose();
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    final settings = widget.state.snapshot?.settings;
+    _gmailClientId.text = settings?.gmailClientId ?? '';
+    _microsoftClientId.text = settings?.microsoftClientId ?? '';
   }
 
   @override
@@ -1072,6 +1084,9 @@ class _AddAccountDialogState extends State<_AddAccountDialog> {
                 _OAuthProviderPanel(
                   provider: _provider,
                   oauthStart: _oauthStart,
+                  clientIdController: _provider == 'gmail'
+                      ? _gmailClientId
+                      : _microsoftClientId,
                   onCopy: _copyOAuthUrl,
                 ),
               ] else ...[
@@ -1224,11 +1239,39 @@ class _AddAccountDialogState extends State<_AddAccountDialog> {
 
   Future<void> _submit() async {
     if (_isOAuthProvider) {
+      final clientId =
+          (_provider == 'gmail' ? _gmailClientId : _microsoftClientId)
+              .text
+              .trim();
+      if (clientId.isEmpty) {
+        setState(() => _formError = _provider == 'gmail'
+            ? '请填写 Google OAuth Client ID'
+            : '请填写 Microsoft OAuth Client ID');
+        return;
+      }
       setState(() {
         _saving = true;
         _formError = null;
         _oauthStart = null;
       });
+      final current =
+          widget.state.snapshot?.settings ?? MailboxSnapshot.empty().settings;
+      await widget.state.updateSettings(
+        current.copyWith(
+          gmailClientId: _provider == 'gmail' ? clientId : null,
+          microsoftClientId: _provider == 'outlook' ? clientId : null,
+        ),
+      );
+      if (!mounted) {
+        return;
+      }
+      if (widget.state.error != null) {
+        setState(() {
+          _saving = false;
+          _formError = widget.state.error;
+        });
+        return;
+      }
       final oauth = await widget.state.startOAuth(_provider);
       if (!mounted) {
         return;
@@ -1349,11 +1392,13 @@ class _OAuthProviderPanel extends StatelessWidget {
   const _OAuthProviderPanel({
     required this.provider,
     required this.oauthStart,
+    required this.clientIdController,
     required this.onCopy,
   });
 
   final String provider;
   final OAuthStart? oauthStart;
+  final TextEditingController clientIdController;
   final VoidCallback onCopy;
 
   @override
@@ -1402,9 +1447,22 @@ class _OAuthProviderPanel extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 12),
-        const _OAuthStep(text: '1. 在服务端 .env 配置对应 OAuth Client ID'),
-        const _OAuthStep(text: '2. 生成授权链接，并复制到浏览器打开'),
-        const _OAuthStep(text: '3. 登录官方账号授权，后端回调后再同步邮件'),
+        TextField(
+          controller: clientIdController,
+          decoration: InputDecoration(
+            prefixIcon: const Icon(Icons.key_rounded),
+            labelText: isGmail
+                ? 'Google OAuth Client ID'
+                : 'Microsoft OAuth Client ID',
+            hintText: isGmail
+                ? 'xxxx.apps.googleusercontent.com'
+                : 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx',
+          ),
+        ),
+        const SizedBox(height: 12),
+        const _OAuthStep(text: '1. 在官方控制台创建 OAuth 应用，并把回调地址填进去'),
+        const _OAuthStep(text: '2. 在这里填写 Client ID，客户端会上传保存到后端'),
+        const _OAuthStep(text: '3. 生成授权链接，复制到浏览器打开并登录官方账号授权'),
         if (oauthStart != null) ...[
           const SizedBox(height: 12),
           Text('回调地址', style: Theme.of(context).textTheme.labelLarge),

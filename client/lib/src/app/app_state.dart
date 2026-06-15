@@ -183,6 +183,19 @@ class AppState extends ChangeNotifier {
     return result;
   }
 
+  Future<void> updateSettings(MailSettings settings) async {
+    await _run(() async {
+      final updated = await api.updateSettings(settings);
+      final current = snapshot ?? MailboxSnapshot.empty();
+      snapshot = MailboxSnapshot(
+        accounts: current.accounts,
+        folders: current.folders,
+        messages: current.messages,
+        settings: updated,
+      );
+    });
+  }
+
   void selectFolder(String id) {
     selectedFolderId = id;
     selectedMessageId = visibleMessages.firstOrNull?.id;

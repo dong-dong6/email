@@ -39,8 +39,8 @@ docker compose up -d --build
 
 客户端点左侧“添加邮箱”：
 
-- Gmail：邮箱类型选择 `Gmail 官方授权`，后端需要先配置 `GMAIL_CLIENT_ID`，客户端会生成 Google OAuth 授权链接。
-- Outlook：邮箱类型选择 `Outlook 官方授权`，后端需要先配置 `MICROSOFT_CLIENT_ID`，客户端会生成 Microsoft OAuth 授权链接。
+- Gmail：邮箱类型选择 `Gmail 官方授权`，在客户端填写 Google OAuth Client ID 后生成授权链接。
+- Outlook：邮箱类型选择 `Outlook 官方授权`，在客户端填写 Microsoft OAuth Client ID 后生成授权链接。
 - 其他邮箱：邮箱类型选择 `其他邮箱 IMAP/SMTP`，填写邮箱服务商提供的 IMAP/SMTP 服务器、端口和应用专用密码。
 
 通用 IMAP/SMTP 添加后后端会立即执行一次 INBOX 初始同步，之后可以点客户端同步按钮再次拉取最近邮件。发信走后端 `/api/v1/send`，客户端不会直连 SMTP。Gmail/Outlook 需要完成 OAuth token 交换和官方 API connector 后再同步。

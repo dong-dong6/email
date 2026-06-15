@@ -36,6 +36,8 @@ func NewMemory() *Memory {
 			RemoteImagesDefault: false,
 			Density:             "comfortable",
 			SignatureHTML:       "<p>由自托管邮箱发送。</p>",
+			GmailClientID:       "",
+			MicrosoftClientID:   "",
 		},
 		secrets: &SecretKeeper{},
 	}

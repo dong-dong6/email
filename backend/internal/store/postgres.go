@@ -474,13 +474,15 @@ func (p *Postgres) DeleteRule(ctx context.Context, id string) error {
 
 func (p *Postgres) Settings(ctx context.Context) (model.Settings, error) {
 	var s model.Settings
-	err := p.pool.QueryRow(ctx, "SELECT remote_images_default, density, signature_html FROM settings WHERE id = TRUE").Scan(
-		&s.RemoteImagesDefault, &s.Density, &s.SignatureHTML)
+	err := p.pool.QueryRow(ctx, "SELECT remote_images_default, density, signature_html, gmail_client_id, microsoft_client_id FROM settings WHERE id = TRUE").Scan(
+		&s.RemoteImagesDefault, &s.Density, &s.SignatureHTML, &s.GmailClientID, &s.MicrosoftClientID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return model.Settings{
 			RemoteImagesDefault: false,
 			Density:             "comfortable",
 			SignatureHTML:       "<p>由自托管邮箱发送。</p>",
+			GmailClientID:       "",
+			MicrosoftClientID:   "",
 		}, nil
 	}
 	return s, err
@@ -488,10 +490,10 @@ func (p *Postgres) Settings(ctx context.Context) (model.Settings, error) {
 
 func (p *Postgres) UpdateSettings(ctx context.Context, settings model.Settings) (model.Settings, error) {
 	_, err := p.pool.Exec(ctx, `
-		INSERT INTO settings (id, remote_images_default, density, signature_html)
-		VALUES (TRUE, $1, $2, $3)
-		ON CONFLICT (id) DO UPDATE SET remote_images_default=$1, density=$2, signature_html=$3
-	`, settings.RemoteImagesDefault, settings.Density, settings.SignatureHTML)
+		INSERT INTO settings (id, remote_images_default, density, signature_html, gmail_client_id, microsoft_client_id)
+		VALUES (TRUE, $1, $2, $3, $4, $5)
+		ON CONFLICT (id) DO UPDATE SET remote_images_default=$1, density=$2, signature_html=$3, gmail_client_id=$4, microsoft_client_id=$5
+	`, settings.RemoteImagesDefault, settings.Density, settings.SignatureHTML, settings.GmailClientID, settings.MicrosoftClientID)
 	return settings, err
 }
 

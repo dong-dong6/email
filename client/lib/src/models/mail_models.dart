@@ -205,19 +205,49 @@ class MailSettings {
     required this.remoteImagesDefault,
     required this.density,
     required this.signatureHtml,
+    required this.gmailClientId,
+    required this.microsoftClientId,
   });
 
   final bool remoteImagesDefault;
   final String density;
   final String signatureHtml;
+  final String gmailClientId;
+  final String microsoftClientId;
 
   factory MailSettings.fromJson(Map<String, dynamic> json) {
     return MailSettings(
       remoteImagesDefault: json['remote_images_default'] as bool? ?? false,
       density: json['density'] as String? ?? 'comfortable',
       signatureHtml: json['signature_html'] as String? ?? '',
+      gmailClientId: json['gmail_client_id'] as String? ?? '',
+      microsoftClientId: json['microsoft_client_id'] as String? ?? '',
     );
   }
+
+  MailSettings copyWith({
+    bool? remoteImagesDefault,
+    String? density,
+    String? signatureHtml,
+    String? gmailClientId,
+    String? microsoftClientId,
+  }) {
+    return MailSettings(
+      remoteImagesDefault: remoteImagesDefault ?? this.remoteImagesDefault,
+      density: density ?? this.density,
+      signatureHtml: signatureHtml ?? this.signatureHtml,
+      gmailClientId: gmailClientId ?? this.gmailClientId,
+      microsoftClientId: microsoftClientId ?? this.microsoftClientId,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'remote_images_default': remoteImagesDefault,
+        'density': density,
+        'signature_html': signatureHtml,
+        'gmail_client_id': gmailClientId,
+        'microsoft_client_id': microsoftClientId,
+      };
 }
 
 class MailboxSnapshot {
@@ -262,6 +292,8 @@ class MailboxSnapshot {
         remoteImagesDefault: false,
         density: 'comfortable',
         signatureHtml: '<p>由自托管邮箱发送。</p>',
+        gmailClientId: '',
+        microsoftClientId: '',
       ),
     );
   }

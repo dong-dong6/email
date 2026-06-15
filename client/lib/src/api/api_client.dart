@@ -82,6 +82,12 @@ class ApiClient {
     return OAuthStart.fromJson(response);
   }
 
+  Future<MailSettings> updateSettings(MailSettings settings) async {
+    final response =
+        await _json('PUT', '/api/v1/settings', body: settings.toJson());
+    return MailSettings.fromJson(response);
+  }
+
   Future<void> patchMessage(String id, {bool? isRead, bool? isStarred}) async {
     if (offlineMode) {
       return;

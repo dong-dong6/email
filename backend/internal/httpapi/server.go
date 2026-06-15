@@ -246,27 +246,28 @@ func (s *Server) oauthStart(w http.ResponseWriter, r *http.Request) {
 	}
 	provider := model.Provider(strings.ToLower(strings.TrimSpace(r.URL.Query().Get("provider"))))
 	state := randomState()
+	settings := s.db.Settings()
 	switch provider {
 	case model.ProviderGmail:
-		if strings.TrimSpace(s.cfg.GmailClientID) == "" {
-			writeError(w, http.StatusBadRequest, errors.New("GMAIL_CLIENT_ID is not configured"))
+		if strings.TrimSpace(settings.GmailClientID) == "" {
+			writeError(w, http.StatusBadRequest, errors.New("请先填写 Gmail OAuth Client ID"))
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{
 			"provider":     string(provider),
 			"state":        state,
-			"auth_url":     gmailAuthURL(s.cfg, state),
+			"auth_url":     gmailAuthURL(s.cfg, settings.GmailClientID, state),
 			"redirect_uri": publicURL(s.cfg, "/api/v1/oauth/gmail/callback"),
 		})
 	case model.ProviderOutlook:
-		if strings.TrimSpace(s.cfg.MicrosoftClientID) == "" {
-			writeError(w, http.StatusBadRequest, errors.New("MICROSOFT_CLIENT_ID is not configured"))
+		if strings.TrimSpace(settings.MicrosoftClientID) == "" {
+			writeError(w, http.StatusBadRequest, errors.New("请先填写 Microsoft OAuth Client ID"))
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{
 			"provider":     string(provider),
 			"state":        state,
-			"auth_url":     outlookAuthURL(s.cfg, state),
+			"auth_url":     outlookAuthURL(s.cfg, settings.MicrosoftClientID, state),
 			"redirect_uri": publicURL(s.cfg, "/api/v1/oauth/outlook/callback"),
 		})
 	default:
@@ -286,9 +287,9 @@ func (s *Server) oauthCallback(provider string) http.HandlerFunc {
 	}
 }
 
-func gmailAuthURL(cfg config.Config, state string) string {
+func gmailAuthURL(cfg config.Config, clientID, state string) string {
 	values := url.Values{}
-	values.Set("client_id", cfg.GmailClientID)
+	values.Set("client_id", clientID)
 	values.Set("redirect_uri", publicURL(cfg, "/api/v1/oauth/gmail/callback"))
 	values.Set("response_type", "code")
 	values.Set("scope", "https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/gmail.send")
@@ -298,9 +299,9 @@ func gmailAuthURL(cfg config.Config, state string) string {
 	return "https://accounts.google.com/o/oauth2/v2/auth?" + values.Encode()
 }
 
-func outlookAuthURL(cfg config.Config, state string) string {
+func outlookAuthURL(cfg config.Config, clientID, state string) string {
 	values := url.Values{}
-	values.Set("client_id", cfg.MicrosoftClientID)
+	values.Set("client_id", clientID)
 	values.Set("redirect_uri", publicURL(cfg, "/api/v1/oauth/outlook/callback"))
 	values.Set("response_type", "code")
 	values.Set("response_mode", "query")

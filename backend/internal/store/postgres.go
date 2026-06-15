@@ -34,54 +34,6 @@ func (p *Postgres) Close() {
 	p.pool.Close()
 }
 
-func (p *Postgres) SeedDemo(ctx context.Context) error {
-	var count int
-	err := p.pool.QueryRow(ctx, "SELECT COUNT(*) FROM accounts").Scan(&count)
-	if err != nil {
-		return err
-	}
-	if count > 0 {
-		return nil
-	}
-	now := time.Now()
-	_, err = p.pool.Exec(ctx, `
-		INSERT INTO accounts (id, provider, email, display_name, status, sync_cursor, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-	`, "acc_demo", "mock", "owner@example.com", "Personal Mail", "active", "demo-cursor", now, now)
-	if err != nil {
-		return err
-	}
-	folders := []struct {
-		id, providerID, name, role string
-	}{
-		{"fld_inbox", "INBOX", "Inbox", "inbox"},
-		{"fld_sent", "SENT", "Sent", "sent"},
-		{"fld_drafts", "DRAFTS", "Drafts", "drafts"},
-		{"fld_archive", "ARCHIVE", "Archive", "archive"},
-	}
-	for _, f := range folders {
-		_, err = p.pool.Exec(ctx, `
-			INSERT INTO folders (id, account_id, provider_id, name, role)
-			VALUES ($1, $2, $3, $4, $5)
-		`, f.id, "acc_demo", f.providerID, f.name, f.role)
-		if err != nil {
-			return err
-		}
-	}
-	from, _ := json.Marshal(model.Address{Name: "Email System", Email: "system@example.com"})
-	to, _ := json.Marshal([]model.Address{{Name: "Owner", Email: "owner@example.com"}})
-	_, err = p.pool.Exec(ctx, `
-		INSERT INTO messages (id, account_id, folder_id, thread_id, provider_id, sender, recipients, subject, snippet, body_text_ref, body_html_ref, received_at, is_read, labels, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
-	`, "msg_welcome", "acc_demo", "fld_inbox", "thr_welcome", "demo-1",
-		from, to, "欢迎使用自托管邮箱",
-		"后端 API、SSE、草稿、发件队列和自适应客户端已经准备好。",
-		"欢迎使用自托管邮箱。当前演示账号使用 mock connector，接入 Gmail/Outlook/IMAP 凭证后可替换为真实同步。",
-		"<p>欢迎使用自托管邮箱。</p>",
-		now.Add(-2*time.Hour), false, "{inbox}", now, now)
-	return err
-}
-
 func (p *Postgres) Snapshot(ctx context.Context) (model.MailboxSnapshot, error) {
 	accounts, err := p.ListAccounts(ctx)
 	if err != nil {
@@ -528,7 +480,7 @@ func (p *Postgres) Settings(ctx context.Context) (model.Settings, error) {
 		return model.Settings{
 			RemoteImagesDefault: false,
 			Density:             "comfortable",
-			SignatureHTML:       "<p>Sent from self-hosted mail.</p>",
+			SignatureHTML:       "<p>由自托管邮箱发送。</p>",
 		}, nil
 	}
 	return s, err

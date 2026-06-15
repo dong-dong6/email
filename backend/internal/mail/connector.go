@@ -68,7 +68,7 @@ func (m MockConnector) Sync(ctx context.Context, account model.Account) error {
 	now := time.Now()
 	msg := model.Message{
 		AccountID: account.ID, FolderID: inbox.ID, ThreadID: store.NewID("thr"), ProviderID: store.NewID("mock"),
-		From:       model.Address{Name: "Sync Robot", Email: "sync@example.com"},
+		From:       model.Address{Name: "同步服务", Email: "sync@local"},
 		To:         []model.Address{{Email: account.Email}},
 		Subject:    "同步完成 " + now.Format("15:04:05"),
 		Snippet:    "这是 mock connector 生成的同步结果。",

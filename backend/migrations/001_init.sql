@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS settings (
   id BOOLEAN PRIMARY KEY DEFAULT TRUE,
   remote_images_default BOOLEAN NOT NULL DEFAULT FALSE,
   density TEXT NOT NULL DEFAULT 'comfortable',
-  signature_html TEXT NOT NULL DEFAULT '<p>Sent from self-hosted mail.</p>'
+  signature_html TEXT NOT NULL DEFAULT '<p>由自托管邮箱发送。</p>'
 );
 
 CREATE TABLE IF NOT EXISTS accounts (

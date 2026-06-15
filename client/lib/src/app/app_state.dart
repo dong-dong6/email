@@ -132,13 +132,13 @@ class AppState extends ChangeNotifier {
         smtpTls: smtpTls,
       );
       if (api.offlineMode) {
-        final current = snapshot ?? MailboxSnapshot.demo();
+        final current = snapshot ?? MailboxSnapshot.empty();
         final folders = [
           ...current.folders,
           MailFolder(
             id: 'fld_${account.id}_inbox',
             accountId: account.id,
-            name: 'Inbox',
+            name: '收件箱',
             role: 'inbox',
             unreadCount: 0,
             totalCount: 0,
@@ -146,7 +146,7 @@ class AppState extends ChangeNotifier {
           MailFolder(
             id: 'fld_${account.id}_sent',
             accountId: account.id,
-            name: 'Sent',
+            name: '已发送',
             role: 'sent',
             unreadCount: 0,
             totalCount: 0,

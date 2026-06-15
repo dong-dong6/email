@@ -14,7 +14,7 @@ flutter run -d windows
 On the login screen, set the service URL to your backend origin, for example:
 
 ```text
-https://mail.example.com
+http://你的服务器IP:8080
 ```
 
 Do not include `/api/v1`; the client appends API paths automatically.

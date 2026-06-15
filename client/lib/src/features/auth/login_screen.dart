@@ -207,7 +207,7 @@ class _LoginScreenState extends State<LoginScreen> {
       decoration: InputDecoration(
         prefixIcon: const Icon(Icons.dns_outlined),
         labelText: '服务地址',
-        hintText: 'https://mail.example.com',
+        hintText: 'http://你的服务器IP:8080',
         suffixIcon: _checkingServer
             ? const SizedBox(
                 width: 20,

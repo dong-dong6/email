@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"email/backend/internal/blob"
 	"email/backend/internal/model"
 )
 
@@ -36,7 +35,7 @@ func NewMemory() *Memory {
 		settings: model.Settings{
 			RemoteImagesDefault: false,
 			Density:             "comfortable",
-			SignatureHTML:       "<p>Sent from self-hosted mail.</p>",
+			SignatureHTML:       "<p>由自托管邮箱发送。</p>",
 		},
 		secrets: &SecretKeeper{},
 	}
@@ -50,66 +49,6 @@ func NewMemoryWithKey(key []byte) (*Memory, error) {
 	m := NewMemory()
 	m.secrets = sk
 	return m, nil
-}
-
-func (m *Memory) SeedDemo(blobs *blob.Store) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if len(m.accounts) > 0 {
-		return
-	}
-	now := time.Now()
-	account := model.Account{
-		ID:          "acc_demo",
-		Provider:    model.ProviderMock,
-		Email:       "owner@example.com",
-		DisplayName: "Personal Mail",
-		Status:      model.AccountActive,
-		SyncCursor:  "demo-cursor",
-		CreatedAt:   now,
-		UpdatedAt:   now,
-	}
-	inbox := model.Folder{ID: "fld_inbox", AccountID: account.ID, ProviderID: "INBOX", Name: "Inbox", Role: "inbox", UnreadCount: 2, TotalCount: 3}
-	sent := model.Folder{ID: "fld_sent", AccountID: account.ID, ProviderID: "SENT", Name: "Sent", Role: "sent", TotalCount: 1}
-	drafts := model.Folder{ID: "fld_drafts", AccountID: account.ID, ProviderID: "DRAFTS", Name: "Drafts", Role: "drafts"}
-	archive := model.Folder{ID: "fld_archive", AccountID: account.ID, ProviderID: "ARCHIVE", Name: "Archive", Role: "archive"}
-	m.accounts[account.ID] = account
-	for _, folder := range []model.Folder{inbox, sent, drafts, archive} {
-		m.folders[folder.ID] = folder
-	}
-	m.messages["msg_welcome"] = model.Message{
-		ID: "msg_welcome", AccountID: account.ID, FolderID: inbox.ID, ThreadID: "thr_welcome", ProviderID: "demo-1",
-		From:       model.Address{Name: "Email System", Email: "system@example.com"},
-		To:         []model.Address{{Name: "Owner", Email: account.Email}},
-		Subject:    "欢迎使用自托管邮箱",
-		Snippet:    "后端 API、SSE、草稿、发件队列和自适应客户端已经准备好。",
-		BodyText:   "欢迎使用自托管邮箱。当前演示账号使用 mock connector，接入 Gmail/Outlook/IMAP 凭证后可替换为真实同步。",
-		BodyHTML:   "<p>欢迎使用自托管邮箱。</p><p>当前演示账号使用 mock connector，接入 Gmail/Outlook/IMAP 凭证后可替换为真实同步。</p>",
-		ReceivedAt: ptrTime(now.Add(-2 * time.Hour)),
-		IsRead:     false, Labels: []string{"inbox"}, CreatedAt: now, UpdatedAt: now,
-	}
-	m.messages["msg_design"] = model.Message{
-		ID: "msg_design", AccountID: account.ID, FolderID: inbox.ID, ThreadID: "thr_design", ProviderID: "demo-2",
-		From:       model.Address{Name: "Product Notes", Email: "notes@example.com"},
-		To:         []model.Address{{Email: account.Email}},
-		Subject:    "界面策略",
-		Snippet:    "手机单栏、平板双栏、桌面三栏，默认阻止远程图片。",
-		BodyText:   "客户端采用 Material 3、自适应布局、低噪声高信息密度界面，支持邮件列表、阅读、搜索、写信和设置。",
-		BodyHTML:   "<p>客户端采用 Material 3、自适应布局、低噪声高信息密度界面。</p>",
-		ReceivedAt: ptrTime(now.Add(-30 * time.Minute)),
-		IsRead:     false, IsStarred: true, Labels: []string{"inbox", "starred"}, CreatedAt: now, UpdatedAt: now,
-	}
-	m.messages["msg_sent"] = model.Message{
-		ID: "msg_sent", AccountID: account.ID, FolderID: sent.ID, ThreadID: "thr_sent", ProviderID: "demo-3",
-		From:     model.Address{Name: "Owner", Email: account.Email},
-		To:       []model.Address{{Name: "Team", Email: "team@example.com"}},
-		Subject:  "项目骨架已完成",
-		Snippet:  "后续重点是补齐 Gmail/Graph/IMAP 的真实 provider 调用。",
-		BodyText: "项目骨架已完成，后续重点是补齐真实 provider 调用并扩展持久化仓库。",
-		SentAt:   ptrTime(now.Add(-10 * time.Minute)),
-		IsRead:   true, Labels: []string{"sent"}, CreatedAt: now, UpdatedAt: now,
-	}
-	m.recountLocked()
 }
 
 func (m *Memory) Snapshot() model.MailboxSnapshot {
@@ -456,11 +395,11 @@ func (m *Memory) recountLocked() {
 
 func defaultFolders(accountID string) []model.Folder {
 	return []model.Folder{
-		{ID: NewID("fld"), AccountID: accountID, ProviderID: "INBOX", Name: "Inbox", Role: "inbox"},
-		{ID: NewID("fld"), AccountID: accountID, ProviderID: "SENT", Name: "Sent", Role: "sent"},
-		{ID: NewID("fld"), AccountID: accountID, ProviderID: "DRAFTS", Name: "Drafts", Role: "drafts"},
-		{ID: NewID("fld"), AccountID: accountID, ProviderID: "ARCHIVE", Name: "Archive", Role: "archive"},
-		{ID: NewID("fld"), AccountID: accountID, ProviderID: "TRASH", Name: "Trash", Role: "trash"},
+		{ID: NewID("fld"), AccountID: accountID, ProviderID: "INBOX", Name: "收件箱", Role: "inbox"},
+		{ID: NewID("fld"), AccountID: accountID, ProviderID: "SENT", Name: "已发送", Role: "sent"},
+		{ID: NewID("fld"), AccountID: accountID, ProviderID: "DRAFTS", Name: "草稿箱", Role: "drafts"},
+		{ID: NewID("fld"), AccountID: accountID, ProviderID: "ARCHIVE", Name: "归档", Role: "archive"},
+		{ID: NewID("fld"), AccountID: accountID, ProviderID: "TRASH", Name: "已删除", Role: "trash"},
 	}
 }
 

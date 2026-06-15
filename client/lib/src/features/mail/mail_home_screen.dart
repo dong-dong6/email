@@ -132,13 +132,13 @@ class _MobileTopBar extends StatelessWidget {
                 PopupMenuItem(
                   value: folder.id,
                   child: Text(
-                      '${folder.name}  ${folder.unreadCount > 0 ? folder.unreadCount : ''}'),
+                      '${_folderDisplayName(folder)}  ${folder.unreadCount > 0 ? folder.unreadCount : ''}'),
                 ),
             ],
           ),
           Expanded(
             child: Text(
-              state.selectedFolder?.name ?? 'Inbox',
+              _selectedFolderTitle(state),
               style: Theme.of(context).textTheme.titleLarge,
               overflow: TextOverflow.ellipsis,
             ),
@@ -181,7 +181,7 @@ class _Sidebar extends StatelessWidget {
               Icon(Icons.alternate_email_rounded, color: scheme.primary),
               const SizedBox(width: 12),
               Expanded(
-                child: Text('Mail',
+                child: Text('邮箱',
                     style: Theme.of(context).textTheme.titleLarge,
                     overflow: TextOverflow.ellipsis),
               ),
@@ -198,7 +198,7 @@ class _Sidebar extends StatelessWidget {
         if (state.offlineMode)
           const Padding(
             padding: EdgeInsets.symmetric(horizontal: 16),
-            child: _StatusPill(icon: Icons.cloud_off_rounded, text: '离线演示'),
+            child: _StatusPill(icon: Icons.cloud_off_rounded, text: '离线模式'),
           ),
         const SizedBox(height: 8),
         Padding(
@@ -269,42 +269,55 @@ class _Rail extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     final folders = state.folders.take(5).toList();
-    final selectedIndex =
-        folders.indexWhere((folder) => folder.id == state.selectedFolder?.id);
-    return NavigationRail(
-      selectedIndex: selectedIndex < 0 ? 0 : selectedIndex,
-      onDestinationSelected: (index) => state.selectFolder(folders[index].id),
-      labelType: NavigationRailLabelType.all,
-      leading: Padding(
-        padding: const EdgeInsets.only(top: 12, bottom: 16),
-        child: IconButton.filled(
-          tooltip: '写信',
-          onPressed: () => _showComposer(context, state),
-          icon: const Icon(Icons.edit_rounded),
-        ),
-      ),
-      trailing: Expanded(
-        child: Align(
-          alignment: Alignment.bottomCenter,
-          child: Padding(
-            padding: const EdgeInsets.only(bottom: 12),
-            child: IconButton(
-              tooltip: '同步',
-              onPressed: state.syncSelectedAccount,
-              icon: const Icon(Icons.sync_rounded),
-            ),
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(top: 12, bottom: 12),
+          child: IconButton.filled(
+            tooltip: '写信',
+            onPressed: () => _showComposer(context, state),
+            icon: const Icon(Icons.edit_rounded),
           ),
         ),
-      ),
-      groupAlignment: -0.85,
-      destinations: [
-        for (final folder in folders)
-          NavigationRailDestination(
-            icon: Icon(_folderIcon(folder.role)),
-            selectedIcon: Icon(_folderIcon(folder.role, selected: true)),
-            label: Text(folder.name, overflow: TextOverflow.ellipsis),
+        Expanded(
+          child: ListView(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            children: [
+              for (final folder in folders)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Tooltip(
+                    message: _folderDisplayName(folder),
+                    child: IconButton(
+                      isSelected: state.selectedFolder?.id == folder.id,
+                      style: IconButton.styleFrom(
+                        backgroundColor: state.selectedFolder?.id == folder.id
+                            ? scheme.secondaryContainer
+                            : null,
+                        foregroundColor: state.selectedFolder?.id == folder.id
+                            ? scheme.onSecondaryContainer
+                            : scheme.onSurfaceVariant,
+                      ),
+                      onPressed: () => state.selectFolder(folder.id),
+                      icon: Icon(_folderIcon(folder.role)),
+                      selectedIcon:
+                          Icon(_folderIcon(folder.role, selected: true)),
+                    ),
+                  ),
+                ),
+            ],
           ),
+        ),
+        Padding(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: IconButton(
+            tooltip: '同步',
+            onPressed: state.syncSelectedAccount,
+            icon: const Icon(Icons.sync_rounded),
+          ),
+        ),
       ],
     );
   }
@@ -552,7 +565,7 @@ class _MessageDetail extends StatelessWidget {
                             value: 'move:${folder.id}',
                             child: ListTile(
                               leading: Icon(_folderIcon(folder.role)),
-                              title: Text('移到 ${folder.name}'),
+                              title: Text('移到 ${_folderDisplayName(folder)}'),
                               dense: true,
                             ),
                           )),
@@ -688,7 +701,7 @@ class _FolderTile extends StatelessWidget {
       selectedTileColor:
           Theme.of(context).colorScheme.secondaryContainer.withOpacity(0.5),
       leading: Icon(_folderIcon(folder.role)),
-      title: Text(folder.name, overflow: TextOverflow.ellipsis),
+      title: Text(_folderDisplayName(folder), overflow: TextOverflow.ellipsis),
       trailing: folder.unreadCount == 0
           ? null
           : _CountBadge(count: folder.unreadCount),
@@ -1304,7 +1317,7 @@ class _SettingsSheet extends StatelessWidget {
             ListTile(
               leading: const Icon(Icons.key_rounded),
               title: const Text('账号安全'),
-              subtitle: Text(state.offlineMode ? '离线演示模式' : '已连接后端'),
+              subtitle: Text(state.offlineMode ? '离线模式' : '已连接后端'),
             ),
           ],
         ),
@@ -1336,6 +1349,39 @@ void _showAddAccount(BuildContext context, AppState state) {
     context: context,
     builder: (_) => _AddAccountDialog(state: state),
   );
+}
+
+String _folderDisplayName(MailFolder folder) {
+  switch (folder.role.toLowerCase()) {
+    case 'inbox':
+      return '收件箱';
+    case 'sent':
+      return '已发送';
+    case 'drafts':
+    case 'draft':
+      return '草稿箱';
+    case 'archive':
+      return '归档';
+    case 'trash':
+    case 'deleted':
+      return '已删除';
+    case 'spam':
+    case 'junk':
+      return '垃圾邮件';
+    case 'starred':
+      return '星标邮件';
+    default:
+      return switch (folder.name.trim().toLowerCase()) {
+        'inbox' => '收件箱',
+        'sent' || 'sent mail' => '已发送',
+        'draft' || 'drafts' => '草稿箱',
+        'archive' || 'all mail' => '归档',
+        'trash' || 'deleted items' => '已删除',
+        'spam' || 'junk' || 'junk email' => '垃圾邮件',
+        'starred' => '星标邮件',
+        _ => folder.name,
+      };
+  }
 }
 
 IconData _folderIcon(String role, {bool selected = false}) {
@@ -1423,7 +1469,7 @@ TextSpan _htmlToTextSpan(String html, TextStyle baseStyle, Color linkColor) {
 List<InlineSpan> _htmlNodeToSpans(
     dom.Node node, TextStyle style, Color linkColor) {
   if (node is dom.Text) {
-    final text = node.text.replaceAll(RegExp(r'\s+'), ' ');
+    final text = _softWrapLongRuns(node.text.replaceAll(RegExp(r'\s+'), ' '));
     if (text.trim().isEmpty) {
       return const [];
     }
@@ -1440,7 +1486,7 @@ List<InlineSpan> _htmlNodeToSpans(
       final alt = node.attributes['alt']?.trim();
       return alt == null || alt.isEmpty
           ? const []
-          : [TextSpan(text: '[$alt]', style: style)];
+          : [TextSpan(text: '[${_softWrapLongRuns(alt)}]', style: style)];
     case 'strong':
     case 'b':
       return _htmlChildrenToSpans(
@@ -1462,7 +1508,7 @@ List<InlineSpan> _htmlNodeToSpans(
       return [
         ...children,
         TextSpan(
-          text: ' <$href>',
+          text: ' <${_softWrapLongRuns(href)}>',
           style: style.copyWith(color: linkColor),
         ),
       ];
@@ -1523,6 +1569,31 @@ List<InlineSpan> _htmlChildrenToSpans(
     for (final child in element.nodes)
       ..._htmlNodeToSpans(child, style, linkColor),
   ];
+}
+
+String _selectedFolderTitle(AppState state) {
+  final folder = state.selectedFolder;
+  return folder == null ? '收件箱' : _folderDisplayName(folder);
+}
+
+String _softWrapLongRuns(String value) {
+  const chunkSize = 48;
+  return value.splitMapJoin(
+    RegExp(r'\S{' '$chunkSize' r',}'),
+    onMatch: (match) {
+      final text = match.group(0) ?? '';
+      final buffer = StringBuffer();
+      for (var index = 0; index < text.length; index += chunkSize) {
+        if (index > 0) {
+          buffer.write('\u200B');
+        }
+        final end = (index + chunkSize).clamp(0, text.length);
+        buffer.write(text.substring(index, end));
+      }
+      return buffer.toString();
+    },
+    onNonMatch: (text) => text,
+  );
 }
 
 List<InlineSpan> _trimTrailingBreaks(List<InlineSpan> spans) {

@@ -22,30 +22,18 @@ class ApiClient {
   }
 
   Future<void> login(String email, String password, {String totp = ''}) async {
-    try {
-      final response = await _json('POST', '/api/v1/auth/login',
-          body: {
-            'email': email,
-            'password': password,
-            'totp': totp,
-          },
-          auth: false);
-      _accessToken = response['access_token'] as String?;
-      offlineMode = false;
-    } catch (_) {
-      if (email == 'owner@example.com' && password == 'change-me-now') {
-        offlineMode = true;
-        _accessToken = 'offline';
-        return;
-      }
-      rethrow;
-    }
+    final response = await _json('POST', '/api/v1/auth/login',
+        body: {
+          'email': email,
+          'password': password,
+          'totp': totp,
+        },
+        auth: false);
+    _accessToken = response['access_token'] as String?;
+    offlineMode = false;
   }
 
   Future<MailboxSnapshot> snapshot() async {
-    if (offlineMode) {
-      return MailboxSnapshot.demo();
-    }
     final response = await _json('GET', '/api/v1/snapshot');
     return MailboxSnapshot.fromJson(response);
   }

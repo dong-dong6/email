@@ -47,7 +47,6 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("init memory store: %w", err)
 	}
-	db.SeedDemo(blobStore)
 
 	var userStore auth.UserStore
 	databaseURL := os.Getenv("DATABASE_URL")
@@ -57,9 +56,6 @@ func run() error {
 			slog.Warn("failed to connect to postgres, using config-based auth", "error", err)
 		} else {
 			defer pgStore.Close()
-			if err := pgStore.SeedDemo(ctx); err != nil {
-				slog.Warn("failed to seed demo data", "error", err)
-			}
 			userStore = store.NewUserStoreAdapter(pgStore)
 			slog.Info("PostgreSQL connected for user management")
 		}

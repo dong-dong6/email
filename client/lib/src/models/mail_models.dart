@@ -253,93 +253,15 @@ class MailboxSnapshot {
     );
   }
 
-  factory MailboxSnapshot.demo() {
-    final now = DateTime.now();
-    const account = MailAccount(
-      id: 'acc_demo',
-      provider: 'mock',
-      email: 'owner@example.com',
-      displayName: 'Personal Mail',
-      status: 'active',
-    );
-    const inbox = MailFolder(
-      id: 'fld_inbox',
-      accountId: 'acc_demo',
-      name: 'Inbox',
-      role: 'inbox',
-      unreadCount: 2,
-      totalCount: 2,
-    );
-    const sent = MailFolder(
-      id: 'fld_sent',
-      accountId: 'acc_demo',
-      name: 'Sent',
-      role: 'sent',
-      unreadCount: 0,
-      totalCount: 1,
-    );
-    return MailboxSnapshot(
-      accounts: const [account],
-      folders: const [
-        inbox,
-        sent,
-        MailFolder(
-            id: 'fld_drafts',
-            accountId: 'acc_demo',
-            name: 'Drafts',
-            role: 'drafts',
-            unreadCount: 0,
-            totalCount: 0),
-        MailFolder(
-            id: 'fld_archive',
-            accountId: 'acc_demo',
-            name: 'Archive',
-            role: 'archive',
-            unreadCount: 0,
-            totalCount: 0),
-      ],
-      messages: [
-        MailMessage(
-          id: 'msg_welcome',
-          accountId: account.id,
-          folderId: inbox.id,
-          threadId: 'thr_welcome',
-          from:
-              const Address(name: 'Email System', email: 'system@example.com'),
-          to: const [Address(name: 'Owner', email: 'owner@example.com')],
-          subject: '欢迎使用自托管邮箱',
-          snippet: '后端 API、SSE、草稿、发件队列和自适应客户端已经准备好。',
-          bodyText: '欢迎使用自托管邮箱。当前客户端会优先连接后端；连接失败时进入离线演示模式。',
-          bodyHtml: '',
-          isRead: false,
-          isStarred: true,
-          labels: const ['inbox'],
-          attachments: const [],
-          receivedAt: now.subtract(const Duration(hours: 2)),
-        ),
-        MailMessage(
-          id: 'msg_ui',
-          accountId: account.id,
-          folderId: inbox.id,
-          threadId: 'thr_ui',
-          from:
-              const Address(name: 'Product Notes', email: 'notes@example.com'),
-          to: const [Address(email: 'owner@example.com')],
-          subject: '多端布局策略',
-          snippet: '手机单栏、平板双栏、桌面三栏，键鼠和触控都能用。',
-          bodyText: 'Flutter 客户端使用 Material 3、自适应断点、简洁邮件列表、阅读面板和写信弹窗。',
-          bodyHtml: '',
-          isRead: false,
-          isStarred: false,
-          labels: const ['inbox'],
-          attachments: const [],
-          receivedAt: now.subtract(const Duration(minutes: 24)),
-        ),
-      ],
+  factory MailboxSnapshot.empty() {
+    return const MailboxSnapshot(
+      accounts: const [],
+      folders: const [],
+      messages: const [],
       settings: const MailSettings(
         remoteImagesDefault: false,
         density: 'comfortable',
-        signatureHtml: '<p>Sent from self-hosted mail.</p>',
+        signatureHtml: '<p>由自托管邮箱发送。</p>',
       ),
     );
   }

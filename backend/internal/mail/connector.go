@@ -26,8 +26,8 @@ type Registry struct {
 func NewRegistry(db *store.Memory, broker *events.Broker) *Registry {
 	return &Registry{connectors: map[model.Provider]Connector{
 		model.ProviderMock:    MockConnector{db: db, broker: broker},
-		model.ProviderGmail:   OAuthAPIConnector{provider: model.ProviderGmail},
-		model.ProviderOutlook: OAuthAPIConnector{provider: model.ProviderOutlook},
+		model.ProviderGmail:   OAuthAPIConnector{provider: model.ProviderGmail, db: db, broker: broker},
+		model.ProviderOutlook: OAuthAPIConnector{provider: model.ProviderOutlook, db: db, broker: broker},
 		model.ProviderIMAP:    IMAPSMTPConnector{provider: model.ProviderIMAP, db: db, broker: broker},
 	}}
 }
@@ -44,6 +44,8 @@ type MockConnector struct {
 
 type OAuthAPIConnector struct {
 	provider model.Provider
+	db       *store.Memory
+	broker   *events.Broker
 }
 
 func (c OAuthAPIConnector) Provider() model.Provider {
@@ -52,10 +54,6 @@ func (c OAuthAPIConnector) Provider() model.Provider {
 
 func (c OAuthAPIConnector) AuthorizeURL(state string) (string, error) {
 	return "", errors.New("oauth authorization is started through /api/v1/accounts/oauth/start")
-}
-
-func (c OAuthAPIConnector) Sync(ctx context.Context, account model.Account) error {
-	return errors.New("oauth api connector is not authorized yet")
 }
 
 func (c OAuthAPIConnector) Send(ctx context.Context, account model.Account, req model.SendRequest) (string, error) {

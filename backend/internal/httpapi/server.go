@@ -243,6 +243,9 @@ func (s *Server) accounts(w http.ResponseWriter, r *http.Request) {
 					account.Status = model.AccountError
 					account.LastError = err.Error()
 				} else {
+					if refreshed, ok := s.db.GetAccount(account.ID); ok {
+						account = refreshed
+					}
 					account.Status = model.AccountActive
 					account.LastError = ""
 					account.SyncCursor = strconv.FormatInt(time.Now().UnixNano(), 10)
@@ -700,6 +703,9 @@ func (s *Server) syncAccount(w http.ResponseWriter, r *http.Request, accountID s
 			account.Status = model.AccountError
 			account.LastError = err.Error()
 		} else {
+			if refreshed, ok := s.db.GetAccount(account.ID); ok {
+				account = refreshed
+			}
 			account.Status = model.AccountActive
 			account.LastError = ""
 			account.SyncCursor = strconv.FormatInt(time.Now().UnixNano(), 10)

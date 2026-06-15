@@ -7,7 +7,7 @@
 - `docker-compose.yml`：Go API 与 PostgreSQL 的 VPS 部署配置。
 - `docs/`：OpenAPI、架构说明和部署手册。
 
-当前实现已经包含认证、账户/文件夹/邮件/草稿/发件/规则/设置 API、SSE 事件、加密 blob 存储、mock connector、IMAP 收信、SMTP 发信、Flutter 自适应 UI 和 HTTP 接入层。Gmail/Outlook 当前通过 IMAP/SMTP + 应用专用密码接入；后续可再替换为官方 OAuth API connector。
+当前实现已经包含认证、账户/文件夹/邮件/草稿/发件/规则/设置 API、SSE 事件、加密 blob 存储、mock connector、IMAP 收信、SMTP 发信、Flutter 自适应 UI 和 HTTP 接入层。Gmail/Outlook 已改为官方 OAuth 授权入口，后续接入 Gmail API / Microsoft Graph token 交换和同步；其他邮箱继续使用通用 IMAP/SMTP。
 
 ## 本地运行
 
@@ -39,11 +39,11 @@ docker compose up -d --build
 
 客户端点左侧“添加邮箱”：
 
-- Gmail：邮箱类型选择 `Gmail`，用户名填完整 Gmail 地址，密码填 Google 应用专用密码。服务器默认 `imap.gmail.com:993`、`smtp.gmail.com:587`。
-- Outlook：邮箱类型选择 `Outlook`，用户名填完整 Outlook 地址，密码填应用专用密码或允许 SMTP/IMAP 的账号密码。服务器默认 `outlook.office365.com:993`、`smtp.office365.com:587`。
-- 其他邮箱：邮箱类型选择 `IMAP/SMTP`，填写邮箱服务商提供的 IMAP/SMTP 服务器和端口。
+- Gmail：邮箱类型选择 `Gmail 官方授权`，后端需要先配置 `GMAIL_CLIENT_ID`，客户端会生成 Google OAuth 授权链接。
+- Outlook：邮箱类型选择 `Outlook 官方授权`，后端需要先配置 `MICROSOFT_CLIENT_ID`，客户端会生成 Microsoft OAuth 授权链接。
+- 其他邮箱：邮箱类型选择 `其他邮箱 IMAP/SMTP`，填写邮箱服务商提供的 IMAP/SMTP 服务器、端口和应用专用密码。
 
-添加后后端会立即执行一次 INBOX 初始同步，之后可以点客户端同步按钮再次拉取最近邮件。发信走后端 `/api/v1/send`，客户端不会直连 SMTP。
+通用 IMAP/SMTP 添加后后端会立即执行一次 INBOX 初始同步，之后可以点客户端同步按钮再次拉取最近邮件。发信走后端 `/api/v1/send`，客户端不会直连 SMTP。Gmail/Outlook 需要完成 OAuth token 交换和官方 API connector 后再同步。
 
 ## 首次启动
 

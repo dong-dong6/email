@@ -20,6 +20,8 @@ type Config struct {
 	OwnerPassword      string
 	OwnerPasswordHash  string
 	OwnerTOTPSecret    string
+	GmailClientID      string
+	MicrosoftClientID  string
 	MasterKey          []byte
 	AccessTTL          time.Duration
 	RefreshTTL         time.Duration
@@ -36,6 +38,8 @@ func Load() (Config, error) {
 		OwnerPassword:      os.Getenv("OWNER_PASSWORD"),
 		OwnerPasswordHash:  os.Getenv("OWNER_PASSWORD_HASH"),
 		OwnerTOTPSecret:    os.Getenv("OWNER_TOTP_SECRET"),
+		GmailClientID:      os.Getenv("GMAIL_CLIENT_ID"),
+		MicrosoftClientID:  os.Getenv("MICROSOFT_CLIENT_ID"),
 		AccessTTL:          15 * time.Minute,
 		RefreshTTL:         30 * 24 * time.Hour,
 		CORSAllowedOrigins: splitCSV(getenv("CORS_ALLOWED_ORIGINS", "http://localhost:8080,http://localhost:5173,http://localhost:3000")),

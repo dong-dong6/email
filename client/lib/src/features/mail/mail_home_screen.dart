@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:html/dom.dart' as dom;
 import 'package:html/parser.dart' as html_parser;
 
+import '../../api/api_client.dart';
 import '../../app/app_state.dart';
 import '../../models/mail_models.dart';
 
@@ -639,18 +641,39 @@ class _MessageBody extends StatelessWidget {
   Widget build(BuildContext context) {
     final html = _sanitizeMailHtml(message.bodyHtml);
     if (html.isNotEmpty) {
-      return SelectableText.rich(
-        _htmlToTextSpan(
-          html,
-          Theme.of(context).textTheme.bodyLarge?.copyWith(height: 1.55) ??
-              const TextStyle(fontSize: 16, height: 1.55),
-          Theme.of(context).colorScheme.primary,
-        ),
-      );
+      return _HtmlMessageView(html: html);
     }
     return SelectableText(
       message.bodyText.isEmpty ? message.snippet : message.bodyText,
       style: Theme.of(context).textTheme.bodyLarge?.copyWith(height: 1.55),
+    );
+  }
+}
+
+class _HtmlMessageView extends StatelessWidget {
+  const _HtmlMessageView({required this.html});
+
+  final String html;
+
+  @override
+  Widget build(BuildContext context) {
+    final document = html_parser.parse(html);
+    final nodes = document.body?.nodes ?? document.nodes;
+    final blocks = [
+      for (final node in nodes)
+        ..._htmlNodeToWidgets(
+          context,
+          node,
+          Theme.of(context).textTheme.bodyLarge?.copyWith(height: 1.55) ??
+              const TextStyle(fontSize: 16, height: 1.55),
+        ),
+    ];
+    if (blocks.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: blocks,
     );
   }
 }
@@ -994,14 +1017,15 @@ class _AddAccountDialogState extends State<_AddAccountDialog> {
   final _displayName = TextEditingController();
   final _username = TextEditingController();
   final _password = TextEditingController();
-  final _imapHost = TextEditingController(text: 'imap.gmail.com');
+  final _imapHost = TextEditingController();
   final _imapPort = TextEditingController(text: '993');
-  final _smtpHost = TextEditingController(text: 'smtp.gmail.com');
+  final _smtpHost = TextEditingController();
   final _smtpPort = TextEditingController(text: '587');
   String _provider = 'gmail';
   bool _imapTls = true;
   bool _smtpTls = true;
   bool _saving = false;
+  OAuthStart? _oauthStart;
   String? _formError;
 
   @override
@@ -1035,32 +1059,39 @@ class _AddAccountDialogState extends State<_AddAccountDialog> {
                   labelText: '邮箱类型',
                 ),
                 items: const [
-                  DropdownMenuItem(value: 'gmail', child: Text('Gmail')),
-                  DropdownMenuItem(value: 'outlook', child: Text('Outlook')),
-                  DropdownMenuItem(value: 'imap', child: Text('IMAP/SMTP')),
-                  DropdownMenuItem(value: 'mock', child: Text('演示邮箱')),
+                  DropdownMenuItem(value: 'gmail', child: Text('Gmail 官方授权')),
+                  DropdownMenuItem(
+                      value: 'outlook', child: Text('Outlook 官方授权')),
+                  DropdownMenuItem(
+                      value: 'imap', child: Text('其他邮箱 IMAP/SMTP')),
                 ],
                 onChanged: (value) => _setProvider(value ?? 'gmail'),
               ),
               const SizedBox(height: 12),
-              TextField(
-                controller: _email,
-                keyboardType: TextInputType.emailAddress,
-                autofillHints: const [AutofillHints.email],
-                decoration: const InputDecoration(
-                  prefixIcon: Icon(Icons.mail_outline_rounded),
-                  labelText: '邮箱地址',
+              if (_isOAuthProvider) ...[
+                _OAuthProviderPanel(
+                  provider: _provider,
+                  oauthStart: _oauthStart,
+                  onCopy: _copyOAuthUrl,
                 ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _displayName,
-                decoration: const InputDecoration(
-                  prefixIcon: Icon(Icons.badge_outlined),
-                  labelText: '显示名称，可选',
+              ] else ...[
+                TextField(
+                  controller: _email,
+                  keyboardType: TextInputType.emailAddress,
+                  autofillHints: const [AutofillHints.email],
+                  decoration: const InputDecoration(
+                    prefixIcon: Icon(Icons.mail_outline_rounded),
+                    labelText: '邮箱地址',
+                  ),
                 ),
-              ),
-              if (_provider != 'mock') ...[
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _displayName,
+                  decoration: const InputDecoration(
+                    prefixIcon: Icon(Icons.badge_outlined),
+                    labelText: '显示名称，可选',
+                  ),
+                ),
                 const SizedBox(height: 12),
                 TextField(
                   controller: _username,
@@ -1154,7 +1185,7 @@ class _AddAccountDialogState extends State<_AddAccountDialog> {
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          'Gmail 和 Outlook 通常需要应用专用密码，并且账号侧要允许 IMAP。',
+                          '这里只用于其他邮箱服务商。Gmail 和 Outlook 请使用官方授权入口，不要填写邮箱密码。',
                           style: TextStyle(color: scheme.onSecondaryContainer),
                         ),
                       ),
@@ -1182,14 +1213,41 @@ class _AddAccountDialogState extends State<_AddAccountDialog> {
                   dimension: 18,
                   child: CircularProgressIndicator(strokeWidth: 2),
                 )
-              : const Icon(Icons.add_rounded),
-          label: const Text('添加'),
+              : Icon(_isOAuthProvider
+                  ? Icons.open_in_browser_rounded
+                  : Icons.add_rounded),
+          label: Text(_isOAuthProvider ? '生成授权链接' : '添加'),
         ),
       ],
     );
   }
 
   Future<void> _submit() async {
+    if (_isOAuthProvider) {
+      setState(() {
+        _saving = true;
+        _formError = null;
+        _oauthStart = null;
+      });
+      final oauth = await widget.state.startOAuth(_provider);
+      if (!mounted) {
+        return;
+      }
+      if (oauth == null || widget.state.error != null) {
+        setState(() {
+          _saving = false;
+          _formError = widget.state.error ?? '授权链接生成失败';
+        });
+        return;
+      }
+      await Clipboard.setData(ClipboardData(text: oauth.authUrl));
+      setState(() {
+        _saving = false;
+        _oauthStart = oauth;
+      });
+      return;
+    }
+
     final email = _email.text.trim();
     if (!email.contains('@')) {
       setState(() => _formError = '请填写有效邮箱地址');
@@ -1233,24 +1291,34 @@ class _AddAccountDialogState extends State<_AddAccountDialog> {
     Navigator.of(context).pop();
   }
 
+  Future<void> _copyOAuthUrl() async {
+    final url = _oauthStart?.authUrl;
+    if (url == null || url.isEmpty) {
+      return;
+    }
+    await Clipboard.setData(ClipboardData(text: url));
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('授权链接已复制')),
+    );
+  }
+
   void _setProvider(String provider) {
     setState(() {
       _provider = provider;
       _formError = null;
+      _oauthStart = null;
       switch (provider) {
         case 'gmail':
-          _imapHost.text = 'imap.gmail.com';
-          _imapPort.text = '993';
-          _smtpHost.text = 'smtp.gmail.com';
-          _smtpPort.text = '587';
-          _imapTls = true;
-          _smtpTls = true;
-          break;
         case 'outlook':
-          _imapHost.text = 'outlook.office365.com';
-          _imapPort.text = '993';
-          _smtpHost.text = 'smtp.office365.com';
-          _smtpPort.text = '587';
+          _email.clear();
+          _displayName.clear();
+          _username.clear();
+          _password.clear();
+          _imapHost.clear();
+          _smtpHost.clear();
           _imapTls = true;
           _smtpTls = true;
           break;
@@ -1266,12 +1334,133 @@ class _AddAccountDialogState extends State<_AddAccountDialog> {
     });
   }
 
+  bool get _isOAuthProvider => _provider == 'gmail' || _provider == 'outlook';
+
   int? _parsePort(String value) {
     final port = int.tryParse(value.trim());
     if (port == null || port <= 0 || port > 65535) {
       return null;
     }
     return port;
+  }
+}
+
+class _OAuthProviderPanel extends StatelessWidget {
+  const _OAuthProviderPanel({
+    required this.provider,
+    required this.oauthStart,
+    required this.onCopy,
+  });
+
+  final String provider;
+  final OAuthStart? oauthStart;
+  final VoidCallback onCopy;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final isGmail = provider == 'gmail';
+    final title =
+        isGmail ? '使用 Google 官方授权连接 Gmail' : '使用 Microsoft 官方授权连接 Outlook';
+    final subtitle = isGmail
+        ? '不会保存你的 Gmail 密码。后端将通过 Gmail API 读取、同步和发送邮件。'
+        : '不会保存你的 Outlook 密码。后端将通过 Microsoft Graph Mail API 读取、同步和发送邮件。';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: scheme.primaryContainer.withOpacity(0.45),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: scheme.primary.withOpacity(0.18)),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(
+                isGmail ? Icons.mail_rounded : Icons.business_center_rounded,
+                color: scheme.primary,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title,
+                        style: Theme.of(context)
+                            .textTheme
+                            .titleMedium
+                            ?.copyWith(fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 6),
+                    Text(subtitle,
+                        style: TextStyle(color: scheme.onSurfaceVariant)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        const _OAuthStep(text: '1. 在服务端 .env 配置对应 OAuth Client ID'),
+        const _OAuthStep(text: '2. 生成授权链接，并复制到浏览器打开'),
+        const _OAuthStep(text: '3. 登录官方账号授权，后端回调后再同步邮件'),
+        if (oauthStart != null) ...[
+          const SizedBox(height: 12),
+          Text('回调地址', style: Theme.of(context).textTheme.labelLarge),
+          const SizedBox(height: 6),
+          SelectableText(
+            oauthStart!.redirectUri,
+            style: TextStyle(color: scheme.onSurfaceVariant),
+          ),
+          const SizedBox(height: 12),
+          Text('授权链接', style: Theme.of(context).textTheme.labelLarge),
+          const SizedBox(height: 6),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: scheme.surfaceContainerHighest.withOpacity(0.72),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: SelectableText(
+              oauthStart!.authUrl,
+              style: TextStyle(color: scheme.primary),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton.icon(
+              onPressed: onCopy,
+              icon: const Icon(Icons.copy_rounded),
+              label: const Text('复制链接'),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class _OAuthStep extends StatelessWidget {
+  const _OAuthStep({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.check_circle_outline_rounded,
+              size: 18, color: Theme.of(context).colorScheme.primary),
+          const SizedBox(width: 8),
+          Expanded(child: Text(text)),
+        ],
+      ),
+    );
   }
 }
 
@@ -1457,17 +1646,178 @@ String _sanitizeMailHtml(String html) {
   return value.trim();
 }
 
-TextSpan _htmlToTextSpan(String html, TextStyle baseStyle, Color linkColor) {
-  final document = html_parser.parse(html);
-  final spans = <InlineSpan>[];
-  for (final node in document.body?.nodes ?? document.nodes) {
-    spans.addAll(_htmlNodeToSpans(node, baseStyle, linkColor));
+List<Widget> _htmlNodeToWidgets(
+  BuildContext context,
+  dom.Node node,
+  TextStyle style,
+) {
+  final scheme = Theme.of(context).colorScheme;
+  if (node is dom.Text) {
+    final text = _softWrapLongRuns(node.text.replaceAll(RegExp(r'\s+'), ' '));
+    if (text.trim().isEmpty) {
+      return const [];
+    }
+    return [
+      Padding(
+        padding: const EdgeInsets.only(bottom: 10),
+        child: SelectableText(text.trim(), style: style),
+      ),
+    ];
   }
-  return TextSpan(style: baseStyle, children: _trimTrailingBreaks(spans));
+  if (node is! dom.Element) {
+    return const [];
+  }
+  final tag = node.localName?.toLowerCase() ?? '';
+  final align = _htmlAlignment(node);
+  final children = () => [
+        for (final child in node.nodes)
+          ..._htmlNodeToWidgets(context, child, style),
+      ];
+  switch (tag) {
+    case 'br':
+      return const [SizedBox(height: 8)];
+    case 'img':
+      return [_HtmlImagePlaceholder(element: node)];
+    case 'a':
+      final href = node.attributes['href']?.trim() ?? '';
+      return [
+        Align(
+          alignment: align,
+          child: _HtmlLinkChip(
+            text: _plainText(node).isEmpty ? href : _plainText(node),
+            href: href,
+          ),
+        ),
+        const SizedBox(height: 12),
+      ];
+    case 'h1':
+    case 'h2':
+    case 'h3':
+    case 'h4':
+      return [
+        Padding(
+          padding: const EdgeInsets.only(top: 12, bottom: 10),
+          child: Align(
+            alignment: align,
+            child: SelectableText.rich(
+              TextSpan(
+                style: style.copyWith(
+                  fontSize: switch (tag) {
+                    'h1' => 26,
+                    'h2' => 22,
+                    'h3' => 19,
+                    _ => 17,
+                  },
+                  fontWeight: FontWeight.w700,
+                  color: scheme.onSurface,
+                ),
+                children: _htmlInlineSpans(context, node.nodes, style),
+              ),
+            ),
+          ),
+        ),
+      ];
+    case 'p':
+    case 'div':
+    case 'section':
+    case 'article':
+    case 'main':
+    case 'header':
+    case 'footer':
+    case 'blockquote':
+      if (_hasBlockChildren(node)) {
+        return [
+          Padding(
+            padding: _htmlBlockPadding(tag),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: children(),
+            ),
+          ),
+        ];
+      }
+      final spans = _htmlInlineSpans(context, node.nodes, style);
+      if (_isBlankSpans(spans)) {
+        return const [SizedBox(height: 10)];
+      }
+      return [
+        Padding(
+          padding: _htmlBlockPadding(tag),
+          child: Align(
+            alignment: align,
+            child: SelectableText.rich(
+              TextSpan(style: style, children: spans),
+              textAlign: _htmlTextAlign(node),
+            ),
+          ),
+        ),
+      ];
+    case 'ul':
+    case 'ol':
+      return [
+        Padding(
+          padding: const EdgeInsets.only(left: 8, bottom: 14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (var index = 0; index < node.children.length; index++)
+                _HtmlListItem(
+                  marker: tag == 'ol' ? '${index + 1}.' : '-',
+                  element: node.children[index],
+                  style: style,
+                ),
+            ],
+          ),
+        ),
+      ];
+    case 'table':
+      return [_HtmlTable(element: node, baseStyle: style)];
+    case 'tbody':
+    case 'thead':
+    case 'tfoot':
+      return children();
+    case 'center':
+      return [
+        Align(
+          alignment: Alignment.center,
+          child: Column(children: children()),
+        ),
+      ];
+    default:
+      if (_hasBlockChildren(node)) {
+        return children();
+      }
+      final spans = _htmlInlineSpans(context, node.nodes, style);
+      if (_isBlankSpans(spans)) {
+        return const [];
+      }
+      return [
+        Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: SelectableText.rich(TextSpan(style: style, children: spans)),
+        ),
+      ];
+  }
 }
 
-List<InlineSpan> _htmlNodeToSpans(
-    dom.Node node, TextStyle style, Color linkColor) {
+List<InlineSpan> _htmlInlineSpans(
+  BuildContext context,
+  List<dom.Node> nodes,
+  TextStyle style,
+) {
+  final linkColor = Theme.of(context).colorScheme.primary;
+  final spans = <InlineSpan>[];
+  for (final node in nodes) {
+    spans.addAll(_htmlNodeToInlineSpans(node, style, linkColor));
+  }
+  return _trimTrailingBreaks(spans);
+}
+
+List<InlineSpan> _htmlNodeToInlineSpans(
+  dom.Node node,
+  TextStyle style,
+  Color linkColor,
+) {
   if (node is dom.Text) {
     final text = _softWrapLongRuns(node.text.replaceAll(RegExp(r'\s+'), ' '));
     if (text.trim().isEmpty) {
@@ -1484,91 +1834,315 @@ List<InlineSpan> _htmlNodeToSpans(
       return const [TextSpan(text: '\n')];
     case 'img':
       final alt = node.attributes['alt']?.trim();
-      return alt == null || alt.isEmpty
-          ? const []
-          : [TextSpan(text: '[${_softWrapLongRuns(alt)}]', style: style)];
-    case 'strong':
-    case 'b':
-      return _htmlChildrenToSpans(
-          node, style.copyWith(fontWeight: FontWeight.w700), linkColor);
-    case 'em':
-    case 'i':
-      return _htmlChildrenToSpans(
-          node, style.copyWith(fontStyle: FontStyle.italic), linkColor);
-    case 'a':
-      final href = node.attributes['href']?.trim() ?? '';
-      final children = _htmlChildrenToSpans(
-        node,
-        style.copyWith(color: linkColor, decoration: TextDecoration.underline),
-        linkColor,
-      );
-      if (href.isEmpty || href.startsWith('#')) {
-        return children;
-      }
       return [
-        ...children,
         TextSpan(
-          text: ' <${_softWrapLongRuns(href)}>',
+          text: alt == null || alt.isEmpty
+              ? '[图片]'
+              : '[图片: ${_softWrapLongRuns(alt)}]',
           style: style.copyWith(color: linkColor),
         ),
       ];
-    case 'h1':
-    case 'h2':
-    case 'h3':
-      return [
-        TextSpan(
-          text: '\n',
-          style: style,
-        ),
-        ..._htmlChildrenToSpans(
+    case 'strong':
+    case 'b':
+      return _htmlChildrenToInlineSpans(
+          node, style.copyWith(fontWeight: FontWeight.w700), linkColor);
+    case 'em':
+    case 'i':
+      return _htmlChildrenToInlineSpans(
+          node, style.copyWith(fontStyle: FontStyle.italic), linkColor);
+    case 'u':
+      return _htmlChildrenToInlineSpans(node,
+          style.copyWith(decoration: TextDecoration.underline), linkColor);
+    case 'code':
+      return _htmlChildrenToInlineSpans(
           node,
           style.copyWith(
-            fontSize: tag == 'h1' ? 24 : (tag == 'h2' ? 21 : 18),
-            fontWeight: FontWeight.w700,
+            fontFamily: 'monospace',
+            backgroundColor: const Color(0x14000000),
           ),
-          linkColor,
+          linkColor);
+    case 'a':
+      final href = node.attributes['href']?.trim() ?? '';
+      final label = _plainText(node).trim();
+      final text = label.isEmpty ? href : label;
+      if (text.isEmpty) {
+        return const [];
+      }
+      return [
+        TextSpan(
+          text: _softWrapLongRuns(text),
+          style: style.copyWith(
+            color: linkColor,
+            decoration: TextDecoration.underline,
+            fontWeight: FontWeight.w600,
+          ),
         ),
-        const TextSpan(text: '\n\n'),
       ];
-    case 'li':
-      return [
-        TextSpan(text: '\n- ', style: style),
-        ..._htmlChildrenToSpans(node, style, linkColor),
-      ];
-    case 'p':
-    case 'div':
-    case 'section':
-    case 'article':
-    case 'tr':
-      return [
-        ..._htmlChildrenToSpans(node, style, linkColor),
-        const TextSpan(text: '\n\n'),
-      ];
-    case 'ul':
-    case 'ol':
-    case 'table':
-    case 'tbody':
-      return [
-        ..._htmlChildrenToSpans(node, style, linkColor),
-        const TextSpan(text: '\n'),
-      ];
-    case 'td':
-    case 'th':
-      return [
-        ..._htmlChildrenToSpans(node, style, linkColor),
-        const TextSpan(text: '  '),
-      ];
+    case 'span':
+      return _htmlChildrenToInlineSpans(
+          node, _styleFromHtml(node, style), linkColor);
     default:
-      return _htmlChildrenToSpans(node, style, linkColor);
+      return _htmlChildrenToInlineSpans(node, style, linkColor);
   }
 }
 
-List<InlineSpan> _htmlChildrenToSpans(
-    dom.Element element, TextStyle style, Color linkColor) {
+List<InlineSpan> _htmlChildrenToInlineSpans(
+  dom.Element element,
+  TextStyle style,
+  Color linkColor,
+) {
   return [
     for (final child in element.nodes)
-      ..._htmlNodeToSpans(child, style, linkColor),
+      ..._htmlNodeToInlineSpans(child, style, linkColor),
   ];
+}
+
+class _HtmlLinkChip extends StatelessWidget {
+  const _HtmlLinkChip({required this.text, required this.href});
+
+  final String text;
+  final String href;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final label = text.trim().isEmpty ? href : text.trim();
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 520),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: scheme.primaryContainer.withOpacity(0.55),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: scheme.primary.withOpacity(0.18)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.link_rounded, color: scheme.primary, size: 18),
+          const SizedBox(width: 8),
+          Flexible(
+            child: SelectableText(
+              _softWrapLongRuns(label),
+              style: TextStyle(
+                color: scheme.primary,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HtmlImagePlaceholder extends StatelessWidget {
+  const _HtmlImagePlaceholder({required this.element});
+
+  final dom.Element element;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final alt = element.attributes['alt']?.trim() ?? '';
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: scheme.surfaceContainerHighest.withOpacity(0.7),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: scheme.outlineVariant),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.image_not_supported_outlined,
+                color: scheme.onSurfaceVariant),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                alt.isEmpty ? '远程图片已阻止' : '远程图片已阻止：$alt',
+                style: TextStyle(color: scheme.onSurfaceVariant),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _HtmlListItem extends StatelessWidget {
+  const _HtmlListItem({
+    required this.marker,
+    required this.element,
+    required this.style,
+  });
+
+  final String marker;
+  final dom.Element element;
+  final TextStyle style;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(width: 28, child: Text(marker, style: style)),
+          Expanded(
+            child: SelectableText.rich(
+              TextSpan(
+                style: style,
+                children: _htmlInlineSpans(context, element.nodes, style),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HtmlTable extends StatelessWidget {
+  const _HtmlTable({required this.element, required this.baseStyle});
+
+  final dom.Element element;
+  final TextStyle baseStyle;
+
+  @override
+  Widget build(BuildContext context) {
+    final rows = element.querySelectorAll('tr');
+    if (rows.isEmpty) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (final child in element.nodes)
+            ..._htmlNodeToWidgets(context, child, baseStyle),
+        ],
+      );
+    }
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Table(
+          defaultColumnWidth: const IntrinsicColumnWidth(),
+          border: TableBorder.all(color: scheme.outlineVariant),
+          children: [
+            for (final row in rows)
+              TableRow(
+                children: [
+                  for (final cell in row.children.where((item) =>
+                      item.localName == 'td' || item.localName == 'th'))
+                    Container(
+                      constraints: const BoxConstraints(minWidth: 96),
+                      padding: const EdgeInsets.all(10),
+                      color: cell.localName == 'th'
+                          ? scheme.surfaceContainerHighest
+                          : null,
+                      child: SelectableText.rich(
+                        TextSpan(
+                          style: baseStyle.copyWith(
+                            fontWeight:
+                                cell.localName == 'th' ? FontWeight.w700 : null,
+                          ),
+                          children:
+                              _htmlInlineSpans(context, cell.nodes, baseStyle),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+bool _hasBlockChildren(dom.Element element) {
+  const blockTags = {
+    'address',
+    'article',
+    'aside',
+    'blockquote',
+    'center',
+    'div',
+    'footer',
+    'h1',
+    'h2',
+    'h3',
+    'h4',
+    'header',
+    'li',
+    'main',
+    'ol',
+    'p',
+    'section',
+    'table',
+    'ul',
+  };
+  return element.children.any((child) => blockTags.contains(child.localName));
+}
+
+bool _isBlankSpans(List<InlineSpan> spans) {
+  return spans
+      .every((span) => span is TextSpan && (span.text ?? '').trim().isEmpty);
+}
+
+String _plainText(dom.Element element) {
+  return element.text.replaceAll(RegExp(r'\s+'), ' ').trim();
+}
+
+Alignment _htmlAlignment(dom.Element element) {
+  return switch (_htmlTextAlign(element)) {
+    TextAlign.center => Alignment.center,
+    TextAlign.right || TextAlign.end => Alignment.centerRight,
+    _ => Alignment.centerLeft,
+  };
+}
+
+TextAlign _htmlTextAlign(dom.Element element) {
+  final align =
+      '${element.attributes['align'] ?? ''} ${element.attributes['style'] ?? ''}'
+          .toLowerCase();
+  if (align.contains('center')) {
+    return TextAlign.center;
+  }
+  if (align.contains('right')) {
+    return TextAlign.right;
+  }
+  return TextAlign.start;
+}
+
+EdgeInsets _htmlBlockPadding(String tag) {
+  return switch (tag) {
+    'blockquote' => const EdgeInsets.fromLTRB(16, 4, 0, 14),
+    'div' ||
+    'section' ||
+    'article' ||
+    'main' ||
+    'header' ||
+    'footer' =>
+      const EdgeInsets.only(bottom: 8),
+    _ => const EdgeInsets.only(bottom: 14),
+  };
+}
+
+TextStyle _styleFromHtml(dom.Element element, TextStyle base) {
+  final style = element.attributes['style']?.toLowerCase() ?? '';
+  var out = base;
+  if (style.contains('font-weight:bold') ||
+      style.contains('font-weight: bold')) {
+    out = out.copyWith(fontWeight: FontWeight.w700);
+  }
+  if (style.contains('font-style:italic') ||
+      style.contains('font-style: italic')) {
+    out = out.copyWith(fontStyle: FontStyle.italic);
+  }
+  return out;
 }
 
 String _selectedFolderTitle(AppState state) {

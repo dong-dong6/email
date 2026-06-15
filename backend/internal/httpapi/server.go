@@ -2,12 +2,15 @@ package httpapi
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -47,6 +50,9 @@ func (s *Server) Routes() http.Handler {
 
 	mux.Handle("/api/v1/snapshot", s.requireAuth(http.HandlerFunc(s.snapshot)))
 	mux.Handle("/api/v1/accounts", s.requireAuth(http.HandlerFunc(s.accounts)))
+	mux.Handle("/api/v1/accounts/oauth/start", s.requireAuth(http.HandlerFunc(s.oauthStart)))
+	mux.HandleFunc("/api/v1/oauth/gmail/callback", s.oauthCallback("gmail"))
+	mux.HandleFunc("/api/v1/oauth/outlook/callback", s.oauthCallback("outlook"))
 	mux.Handle("/api/v1/accounts/", s.requireAuth(http.HandlerFunc(s.accountByID)))
 	mux.Handle("/api/v1/folders", s.requireAuth(http.HandlerFunc(s.folders)))
 	mux.Handle("/api/v1/messages", s.requireAuth(http.HandlerFunc(s.messages)))
@@ -180,6 +186,10 @@ func (s *Server) accounts(w http.ResponseWriter, r *http.Request) {
 		if req.Provider == "" {
 			req.Provider = model.ProviderMock
 		}
+		if req.Provider == model.ProviderGmail || req.Provider == model.ProviderOutlook {
+			writeError(w, http.StatusBadRequest, errors.New("gmail and outlook must be connected with official OAuth"))
+			return
+		}
 		if req.DisplayName == "" {
 			req.DisplayName = req.Email
 		}
@@ -227,6 +237,92 @@ func (s *Server) accounts(w http.ResponseWriter, r *http.Request) {
 	default:
 		methodNotAllowed(w)
 	}
+}
+
+func (s *Server) oauthStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	provider := model.Provider(strings.ToLower(strings.TrimSpace(r.URL.Query().Get("provider"))))
+	state := randomState()
+	switch provider {
+	case model.ProviderGmail:
+		if strings.TrimSpace(s.cfg.GmailClientID) == "" {
+			writeError(w, http.StatusBadRequest, errors.New("GMAIL_CLIENT_ID is not configured"))
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{
+			"provider":     string(provider),
+			"state":        state,
+			"auth_url":     gmailAuthURL(s.cfg, state),
+			"redirect_uri": publicURL(s.cfg, "/api/v1/oauth/gmail/callback"),
+		})
+	case model.ProviderOutlook:
+		if strings.TrimSpace(s.cfg.MicrosoftClientID) == "" {
+			writeError(w, http.StatusBadRequest, errors.New("MICROSOFT_CLIENT_ID is not configured"))
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{
+			"provider":     string(provider),
+			"state":        state,
+			"auth_url":     outlookAuthURL(s.cfg, state),
+			"redirect_uri": publicURL(s.cfg, "/api/v1/oauth/outlook/callback"),
+		})
+	default:
+		writeError(w, http.StatusBadRequest, errors.New("provider must be gmail or outlook"))
+	}
+}
+
+func (s *Server) oauthCallback(provider string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		code := strings.TrimSpace(r.URL.Query().Get("code"))
+		if code == "" {
+			writeError(w, http.StatusBadRequest, errors.New("missing oauth code"))
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(`<!doctype html><meta charset="utf-8"><title>邮箱授权</title><body style="font-family:system-ui,sans-serif;padding:32px"><h1>授权已返回后端</h1><p>` + provider + ` OAuth 回调已收到。下一步会接入 token 交换和官方邮件 API 同步。</p><p>现在可以关闭这个页面。</p></body>`))
+	}
+}
+
+func gmailAuthURL(cfg config.Config, state string) string {
+	values := url.Values{}
+	values.Set("client_id", cfg.GmailClientID)
+	values.Set("redirect_uri", publicURL(cfg, "/api/v1/oauth/gmail/callback"))
+	values.Set("response_type", "code")
+	values.Set("scope", "https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/gmail.send")
+	values.Set("access_type", "offline")
+	values.Set("prompt", "consent")
+	values.Set("state", state)
+	return "https://accounts.google.com/o/oauth2/v2/auth?" + values.Encode()
+}
+
+func outlookAuthURL(cfg config.Config, state string) string {
+	values := url.Values{}
+	values.Set("client_id", cfg.MicrosoftClientID)
+	values.Set("redirect_uri", publicURL(cfg, "/api/v1/oauth/outlook/callback"))
+	values.Set("response_type", "code")
+	values.Set("response_mode", "query")
+	values.Set("scope", "openid profile email offline_access User.Read Mail.ReadWrite Mail.Send")
+	values.Set("state", state)
+	return "https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize?" + values.Encode()
+}
+
+func publicURL(cfg config.Config, path string) string {
+	base := strings.TrimRight(cfg.PublicURL, "/")
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	return base + path
+}
+
+func randomState() string {
+	var raw [24]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return strconv.FormatInt(time.Now().UnixNano(), 36)
+	}
+	return base64.RawURLEncoding.EncodeToString(raw[:])
 }
 
 func (s *Server) accountByID(w http.ResponseWriter, r *http.Request) {

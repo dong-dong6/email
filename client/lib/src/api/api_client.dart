@@ -76,6 +76,12 @@ class ApiClient {
     return MailAccount.fromJson(response);
   }
 
+  Future<OAuthStart> startOAuth(String provider) async {
+    final response =
+        await _json('GET', '/api/v1/accounts/oauth/start?provider=$provider');
+    return OAuthStart.fromJson(response);
+  }
+
   Future<void> patchMessage(String id, {bool? isRead, bool? isStarred}) async {
     if (offlineMode) {
       return;
@@ -181,4 +187,27 @@ class ApiException implements Exception {
 
   @override
   String toString() => 'ApiException($statusCode): $body';
+}
+
+class OAuthStart {
+  const OAuthStart({
+    required this.provider,
+    required this.authUrl,
+    required this.redirectUri,
+    required this.state,
+  });
+
+  final String provider;
+  final String authUrl;
+  final String redirectUri;
+  final String state;
+
+  factory OAuthStart.fromJson(Map<String, dynamic> json) {
+    return OAuthStart(
+      provider: json['provider'] as String? ?? '',
+      authUrl: json['auth_url'] as String? ?? '',
+      redirectUri: json['redirect_uri'] as String? ?? '',
+      state: json['state'] as String? ?? '',
+    );
+  }
 }

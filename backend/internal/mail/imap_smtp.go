@@ -217,19 +217,11 @@ func NormalizeAccount(account model.Account) (model.Account, error) {
 	case model.ProviderMock:
 		return account, nil
 	case model.ProviderGmail:
-		if account.IMAPHost == "" {
-			account.IMAPHost = "imap.gmail.com"
-		}
-		if account.SMTPHost == "" {
-			account.SMTPHost = "smtp.gmail.com"
-		}
+		account.Status = model.AccountNeedsAuth
+		return account, nil
 	case model.ProviderOutlook:
-		if account.IMAPHost == "" {
-			account.IMAPHost = "outlook.office365.com"
-		}
-		if account.SMTPHost == "" {
-			account.SMTPHost = "smtp.office365.com"
-		}
+		account.Status = model.AccountNeedsAuth
+		return account, nil
 	case model.ProviderIMAP:
 		if account.IMAPHost == "" || account.SMTPHost == "" {
 			return account, errors.New("imap_host and smtp_host are required")

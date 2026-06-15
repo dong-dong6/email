@@ -175,6 +175,14 @@ class AppState extends ChangeNotifier {
     });
   }
 
+  Future<OAuthStart?> startOAuth(String provider) async {
+    OAuthStart? result;
+    await _run(() async {
+      result = await api.startOAuth(provider);
+    });
+    return result;
+  }
+
   void selectFolder(String id) {
     selectedFolderId = id;
     selectedMessageId = visibleMessages.firstOrNull?.id;

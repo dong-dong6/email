@@ -9,6 +9,6 @@ void main() {
     await tester.pumpWidget(
         EmailApp(state: AppState(ApiClient('http://localhost:8080'))));
     expect(find.text('Self-hosted Mail'), findsOneWidget);
-    expect(find.text('登录'), findsOneWidget);
+    expect(find.text('继续'), findsOneWidget);
   });
 }

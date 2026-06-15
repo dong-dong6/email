@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:html/dom.dart' as dom;
+import 'package:html/parser.dart' as html_parser;
 
 import '../../app/app_state.dart';
 import '../../models/mail_models.dart';
@@ -591,13 +593,7 @@ class _MessageDetail extends StatelessWidget {
                 ],
               ),
               const SizedBox(height: 28),
-              SelectableText(
-                message.bodyText.isEmpty ? message.snippet : message.bodyText,
-                style: Theme.of(context)
-                    .textTheme
-                    .bodyLarge
-                    ?.copyWith(height: 1.55),
-              ),
+              _MessageBody(message: message),
               if (message.attachments.isNotEmpty) ...[
                 const SizedBox(height: 24),
                 Wrap(
@@ -617,6 +613,31 @@ class _MessageDetail extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _MessageBody extends StatelessWidget {
+  const _MessageBody({required this.message});
+
+  final MailMessage message;
+
+  @override
+  Widget build(BuildContext context) {
+    final html = _sanitizeMailHtml(message.bodyHtml);
+    if (html.isNotEmpty) {
+      return SelectableText.rich(
+        _htmlToTextSpan(
+          html,
+          Theme.of(context).textTheme.bodyLarge?.copyWith(height: 1.55) ??
+              const TextStyle(fontSize: 16, height: 1.55),
+          Theme.of(context).colorScheme.primary,
+        ),
+      );
+    }
+    return SelectableText(
+      message.bodyText.isEmpty ? message.snippet : message.bodyText,
+      style: Theme.of(context).textTheme.bodyLarge?.copyWith(height: 1.55),
     );
   }
 }
@@ -1358,4 +1379,161 @@ String _initial(Address address) {
     return '?';
   }
   return source.substring(0, 1).toUpperCase();
+}
+
+String _sanitizeMailHtml(String html) {
+  var value = html.trim();
+  if (value.isEmpty) {
+    return '';
+  }
+  value = value.replaceAll(
+      RegExp(
+          r'<\s*(script|style|iframe|object|embed|form)\b[^>]*>.*?<\s*/\s*\1\s*>',
+          caseSensitive: false,
+          dotAll: true),
+      '');
+  value = value.replaceAll(
+      RegExp(r'<\s*(script|style|iframe|object|embed|form)\b[^>]*/?\s*>',
+          caseSensitive: false),
+      '');
+  value = value.replaceAll(
+      RegExp(r"<img\b[^>]*\bsrc\s*=\s*[" "']https?:[^>]*>",
+          caseSensitive: false),
+      '');
+  value = value.replaceAll(
+      RegExp(r"\son[a-z]+\s*=\s*([" "']).*?\1",
+          caseSensitive: false, dotAll: true),
+      '');
+  value = value.replaceAll(
+      RegExp(r"\s(href|src)\s*=\s*([" "'])\s*javascript:.*?\2",
+          caseSensitive: false, dotAll: true),
+      '');
+  return value.trim();
+}
+
+TextSpan _htmlToTextSpan(String html, TextStyle baseStyle, Color linkColor) {
+  final document = html_parser.parse(html);
+  final spans = <InlineSpan>[];
+  for (final node in document.body?.nodes ?? document.nodes) {
+    spans.addAll(_htmlNodeToSpans(node, baseStyle, linkColor));
+  }
+  return TextSpan(style: baseStyle, children: _trimTrailingBreaks(spans));
+}
+
+List<InlineSpan> _htmlNodeToSpans(
+    dom.Node node, TextStyle style, Color linkColor) {
+  if (node is dom.Text) {
+    final text = node.text.replaceAll(RegExp(r'\s+'), ' ');
+    if (text.trim().isEmpty) {
+      return const [];
+    }
+    return [TextSpan(text: text, style: style)];
+  }
+  if (node is! dom.Element) {
+    return const [];
+  }
+  final tag = node.localName?.toLowerCase() ?? '';
+  switch (tag) {
+    case 'br':
+      return const [TextSpan(text: '\n')];
+    case 'img':
+      final alt = node.attributes['alt']?.trim();
+      return alt == null || alt.isEmpty
+          ? const []
+          : [TextSpan(text: '[$alt]', style: style)];
+    case 'strong':
+    case 'b':
+      return _htmlChildrenToSpans(
+          node, style.copyWith(fontWeight: FontWeight.w700), linkColor);
+    case 'em':
+    case 'i':
+      return _htmlChildrenToSpans(
+          node, style.copyWith(fontStyle: FontStyle.italic), linkColor);
+    case 'a':
+      final href = node.attributes['href']?.trim() ?? '';
+      final children = _htmlChildrenToSpans(
+        node,
+        style.copyWith(color: linkColor, decoration: TextDecoration.underline),
+        linkColor,
+      );
+      if (href.isEmpty || href.startsWith('#')) {
+        return children;
+      }
+      return [
+        ...children,
+        TextSpan(
+          text: ' <$href>',
+          style: style.copyWith(color: linkColor),
+        ),
+      ];
+    case 'h1':
+    case 'h2':
+    case 'h3':
+      return [
+        TextSpan(
+          text: '\n',
+          style: style,
+        ),
+        ..._htmlChildrenToSpans(
+          node,
+          style.copyWith(
+            fontSize: tag == 'h1' ? 24 : (tag == 'h2' ? 21 : 18),
+            fontWeight: FontWeight.w700,
+          ),
+          linkColor,
+        ),
+        const TextSpan(text: '\n\n'),
+      ];
+    case 'li':
+      return [
+        TextSpan(text: '\n- ', style: style),
+        ..._htmlChildrenToSpans(node, style, linkColor),
+      ];
+    case 'p':
+    case 'div':
+    case 'section':
+    case 'article':
+    case 'tr':
+      return [
+        ..._htmlChildrenToSpans(node, style, linkColor),
+        const TextSpan(text: '\n\n'),
+      ];
+    case 'ul':
+    case 'ol':
+    case 'table':
+    case 'tbody':
+      return [
+        ..._htmlChildrenToSpans(node, style, linkColor),
+        const TextSpan(text: '\n'),
+      ];
+    case 'td':
+    case 'th':
+      return [
+        ..._htmlChildrenToSpans(node, style, linkColor),
+        const TextSpan(text: '  '),
+      ];
+    default:
+      return _htmlChildrenToSpans(node, style, linkColor);
+  }
+}
+
+List<InlineSpan> _htmlChildrenToSpans(
+    dom.Element element, TextStyle style, Color linkColor) {
+  return [
+    for (final child in element.nodes)
+      ..._htmlNodeToSpans(child, style, linkColor),
+  ];
+}
+
+List<InlineSpan> _trimTrailingBreaks(List<InlineSpan> spans) {
+  final out = [...spans];
+  while (out.isNotEmpty) {
+    final last = out.last;
+    if (last is TextSpan && (last.text ?? '').trim().isEmpty) {
+      out.removeLast();
+      continue;
+    }
+    break;
+  }
+  return out;
 }

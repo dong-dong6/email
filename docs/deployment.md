@@ -10,7 +10,6 @@ docker compose up -d --build
 
 4. 可选配置 `.env`：
 
-- `PUBLIC_URL` 改为你的服务地址，例如 `http://你的VPS_IP:8080`。
 - `API_HTTP_PORT` 改为你要暴露的端口，默认 `8080`。
 - `CORS_ALLOWED_ORIGINS` 只在 Web 客户端跨域访问时需要调整。
 
@@ -18,7 +17,6 @@ docker compose up -d --build
 
 ```env
 API_HTTP_PORT=8080
-PUBLIC_URL=http://你的VPS_IP:8080
 ```
 
 5. 健康检查：
@@ -33,7 +31,7 @@ curl http://你的VPS_IP:8080/healthz
 BACKUP_DIR=./backups scripts/backup.sh
 ```
 
-客户端登录页的“服务地址”填写 `PUBLIC_URL` 对应的地址，不要加 `/api/v1`。
+客户端登录页的“服务地址”填写 Go 后端地址，不要加 `/api/v1`。OAuth 回调地址会基于这个服务地址生成，例如 `http://你的VPS_IP:8080/api/v1/oauth/gmail/callback`。
 
 首次连接全新服务时，客户端会自动进入创建管理员账户流程。服务端会在数据卷中自动生成 `master.key` 作为加密主密钥；这个文件随 `mail-data` volume 保存，不要删除旧 volume 后继续期望读取旧加密数据。
 

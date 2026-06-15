@@ -33,7 +33,7 @@ VPS 部署：
 docker compose up -d --build
 ```
 
-默认会把 Go 后端直接暴露在 `http://服务器IP:8080`，客户端登录页填写这个服务地址即可。需要改端口或公开地址时再复制 `.env.example` 为 `.env`。
+默认会把 Go 后端直接暴露在 `http://服务器IP:8080`，客户端登录页填写这个服务地址即可。需要改端口时再复制 `.env.example` 为 `.env`。
 
 ## 添加真实邮箱
 
@@ -42,6 +42,8 @@ docker compose up -d --build
 - Gmail：邮箱类型选择 `Gmail 官方授权`，在客户端填写 Google OAuth Client ID 后生成授权链接。
 - Outlook：邮箱类型选择 `Outlook 官方授权`，在客户端填写 Microsoft OAuth Client ID 后生成授权链接。
 - 其他邮箱：邮箱类型选择 `其他邮箱 IMAP/SMTP`，填写邮箱服务商提供的 IMAP/SMTP 服务器、端口和应用专用密码。
+
+OAuth 回调地址会使用客户端登录页填写的服务地址生成，例如 `http://服务器IP:8080/api/v1/oauth/gmail/callback`，不再依赖 `.env` 里的公开地址配置。
 
 通用 IMAP/SMTP 添加后后端会立即执行一次 INBOX 初始同步，之后可以点客户端同步按钮再次拉取最近邮件。发信走后端 `/api/v1/send`，客户端不会直连 SMTP。Gmail/Outlook 需要完成 OAuth token 交换和官方 API connector 后再同步。
 

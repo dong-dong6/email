@@ -13,7 +13,6 @@ import (
 type Config struct {
 	Env                string
 	Addr               string
-	PublicURL          string
 	DataDir            string
 	BlobDir            string
 	OwnerEmail         string
@@ -30,7 +29,6 @@ func Load() (Config, error) {
 	cfg := Config{
 		Env:                getenv("APP_ENV", "development"),
 		Addr:               getenv("HTTP_ADDR", ":8080"),
-		PublicURL:          getenv("PUBLIC_URL", "http://localhost:8080"),
 		DataDir:            getenv("DATA_DIR", "./data"),
 		OwnerEmail:         os.Getenv("OWNER_EMAIL"),
 		OwnerPassword:      os.Getenv("OWNER_PASSWORD"),

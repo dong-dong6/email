@@ -247,28 +247,31 @@ func (s *Server) oauthStart(w http.ResponseWriter, r *http.Request) {
 	provider := model.Provider(strings.ToLower(strings.TrimSpace(r.URL.Query().Get("provider"))))
 	state := randomState()
 	settings := s.db.Settings()
+	baseURL := requestBaseURL(r)
 	switch provider {
 	case model.ProviderGmail:
 		if strings.TrimSpace(settings.GmailClientID) == "" {
 			writeError(w, http.StatusBadRequest, errors.New("请先填写 Gmail OAuth Client ID"))
 			return
 		}
+		redirectURI := callbackURL(baseURL, "/api/v1/oauth/gmail/callback")
 		writeJSON(w, http.StatusOK, map[string]string{
 			"provider":     string(provider),
 			"state":        state,
-			"auth_url":     gmailAuthURL(s.cfg, settings.GmailClientID, state),
-			"redirect_uri": publicURL(s.cfg, "/api/v1/oauth/gmail/callback"),
+			"auth_url":     gmailAuthURL(settings.GmailClientID, redirectURI, state),
+			"redirect_uri": redirectURI,
 		})
 	case model.ProviderOutlook:
 		if strings.TrimSpace(settings.MicrosoftClientID) == "" {
 			writeError(w, http.StatusBadRequest, errors.New("请先填写 Microsoft OAuth Client ID"))
 			return
 		}
+		redirectURI := callbackURL(baseURL, "/api/v1/oauth/outlook/callback")
 		writeJSON(w, http.StatusOK, map[string]string{
 			"provider":     string(provider),
 			"state":        state,
-			"auth_url":     outlookAuthURL(s.cfg, settings.MicrosoftClientID, state),
-			"redirect_uri": publicURL(s.cfg, "/api/v1/oauth/outlook/callback"),
+			"auth_url":     outlookAuthURL(settings.MicrosoftClientID, redirectURI, state),
+			"redirect_uri": redirectURI,
 		})
 	default:
 		writeError(w, http.StatusBadRequest, errors.New("provider must be gmail or outlook"))
@@ -287,10 +290,10 @@ func (s *Server) oauthCallback(provider string) http.HandlerFunc {
 	}
 }
 
-func gmailAuthURL(cfg config.Config, clientID, state string) string {
+func gmailAuthURL(clientID, redirectURI, state string) string {
 	values := url.Values{}
 	values.Set("client_id", clientID)
-	values.Set("redirect_uri", publicURL(cfg, "/api/v1/oauth/gmail/callback"))
+	values.Set("redirect_uri", redirectURI)
 	values.Set("response_type", "code")
 	values.Set("scope", "https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/gmail.send")
 	values.Set("access_type", "offline")
@@ -299,10 +302,10 @@ func gmailAuthURL(cfg config.Config, clientID, state string) string {
 	return "https://accounts.google.com/o/oauth2/v2/auth?" + values.Encode()
 }
 
-func outlookAuthURL(cfg config.Config, clientID, state string) string {
+func outlookAuthURL(clientID, redirectURI, state string) string {
 	values := url.Values{}
 	values.Set("client_id", clientID)
-	values.Set("redirect_uri", publicURL(cfg, "/api/v1/oauth/outlook/callback"))
+	values.Set("redirect_uri", redirectURI)
 	values.Set("response_type", "code")
 	values.Set("response_mode", "query")
 	values.Set("scope", "openid profile email offline_access User.Read Mail.ReadWrite Mail.Send")
@@ -310,12 +313,35 @@ func outlookAuthURL(cfg config.Config, clientID, state string) string {
 	return "https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize?" + values.Encode()
 }
 
-func publicURL(cfg config.Config, path string) string {
-	base := strings.TrimRight(cfg.PublicURL, "/")
+func callbackURL(base, path string) string {
+	base = strings.TrimRight(base, "/")
 	if !strings.HasPrefix(path, "/") {
 		path = "/" + path
 	}
 	return base + path
+}
+
+func requestBaseURL(r *http.Request) string {
+	proto := firstHeaderValue(r.Header.Get("X-Forwarded-Proto"))
+	if proto == "" {
+		if r.TLS != nil {
+			proto = "https"
+		} else {
+			proto = "http"
+		}
+	}
+	host := firstHeaderValue(r.Header.Get("X-Forwarded-Host"))
+	if host == "" {
+		host = r.Host
+	}
+	return proto + "://" + strings.TrimRight(host, "/")
+}
+
+func firstHeaderValue(value string) string {
+	if idx := strings.Index(value, ","); idx >= 0 {
+		value = value[:idx]
+	}
+	return strings.TrimSpace(value)
 }
 
 func randomState() string {

@@ -87,7 +87,6 @@ class ApiClient {
     final response = await _json(
       'GET',
       '/api/v1/accounts/oauth/status?state=$encodedState',
-      auth: false,
     );
     return OAuthStatus.fromJson(response);
   }

@@ -15,10 +15,11 @@ import (
 )
 
 type Postgres struct {
-	pool *pgxpool.Pool
+	pool    *pgxpool.Pool
+	secrets *SecretKeeper
 }
 
-func NewPostgres(ctx context.Context, databaseURL string) (*Postgres, error) {
+func NewPostgres(ctx context.Context, databaseURL string, key ...[]byte) (*Postgres, error) {
 	pool, err := pgxpool.New(ctx, databaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("create pool: %w", err)
@@ -27,7 +28,16 @@ func NewPostgres(ctx context.Context, databaseURL string) (*Postgres, error) {
 		pool.Close()
 		return nil, fmt.Errorf("ping: %w", err)
 	}
-	return &Postgres{pool: pool}, nil
+	var secretKey []byte
+	if len(key) > 0 {
+		secretKey = key[0]
+	}
+	secrets, err := NewSecretKeeper(secretKey)
+	if err != nil {
+		pool.Close()
+		return nil, err
+	}
+	return &Postgres{pool: pool, secrets: secrets}, nil
 }
 
 func (p *Postgres) Close() {
@@ -89,7 +99,7 @@ func (p *Postgres) ListAccounts(ctx context.Context) ([]model.Account, error) {
 		if err != nil {
 			return nil, err
 		}
-		accounts = append(accounts, a)
+		accounts = append(accounts, p.decryptAccount(a))
 	}
 	return accounts, rows.Err()
 }
@@ -113,14 +123,16 @@ func (p *Postgres) CreateAccount(ctx context.Context, account model.Account) (mo
 	now := time.Now()
 	account.CreatedAt = now
 	account.UpdatedAt = now
+	stored := account
+	stored.Password = p.secrets.Encrypt(stored.Password)
 	_, err := p.pool.Exec(ctx, `
 		INSERT INTO accounts (id, provider, email, display_name, username, password_secret,
 		       imap_host, imap_port, imap_tls, smtp_host, smtp_port, smtp_tls,
 		       status, sync_cursor, last_error, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
-	`, account.ID, account.Provider, account.Email, account.DisplayName, account.Username, account.Password,
-		account.IMAPHost, account.IMAPPort, account.IMAPTLS, account.SMTPHost, account.SMTPPort, account.SMTPTLS,
-		account.Status, account.SyncCursor, account.LastError, account.CreatedAt, account.UpdatedAt)
+	`, stored.ID, stored.Provider, stored.Email, stored.DisplayName, stored.Username, stored.Password,
+		stored.IMAPHost, stored.IMAPPort, stored.IMAPTLS, stored.SMTPHost, stored.SMTPPort, stored.SMTPTLS,
+		stored.Status, stored.SyncCursor, stored.LastError, stored.CreatedAt, stored.UpdatedAt)
 	if err != nil {
 		return model.Account{}, err
 	}
@@ -149,20 +161,32 @@ func (p *Postgres) GetAccount(ctx context.Context, id string) (model.Account, bo
 	if errors.Is(err, pgx.ErrNoRows) {
 		return model.Account{}, false
 	}
-	return a, err == nil
+	return p.decryptAccount(a), err == nil
 }
 
 func (p *Postgres) UpdateAccount(ctx context.Context, account model.Account) error {
 	account.UpdatedAt = time.Now()
+	if account.Password == "" {
+		if existing, ok := p.GetAccount(ctx, account.ID); ok {
+			account.Password = existing.Password
+		}
+	}
+	stored := account
+	stored.Password = p.secrets.Encrypt(stored.Password)
 	_, err := p.pool.Exec(ctx, `
 		UPDATE accounts SET provider=$2, email=$3, display_name=$4, username=$5, password_secret=$6,
 		       imap_host=$7, imap_port=$8, imap_tls=$9, smtp_host=$10, smtp_port=$11, smtp_tls=$12,
 		       status=$13, sync_cursor=$14, last_error=$15, updated_at=$16
 		WHERE id = $1
-	`, account.ID, account.Provider, account.Email, account.DisplayName, account.Username, account.Password,
-		account.IMAPHost, account.IMAPPort, account.IMAPTLS, account.SMTPHost, account.SMTPPort, account.SMTPTLS,
-		account.Status, account.SyncCursor, account.LastError, account.UpdatedAt)
+	`, stored.ID, stored.Provider, stored.Email, stored.DisplayName, stored.Username, stored.Password,
+		stored.IMAPHost, stored.IMAPPort, stored.IMAPTLS, stored.SMTPHost, stored.SMTPPort, stored.SMTPTLS,
+		stored.Status, stored.SyncCursor, stored.LastError, stored.UpdatedAt)
 	return err
+}
+
+func (p *Postgres) decryptAccount(account model.Account) model.Account {
+	account.Password = p.secrets.Decrypt(account.Password)
+	return account
 }
 
 func (p *Postgres) DeleteAccount(ctx context.Context, id string) error {

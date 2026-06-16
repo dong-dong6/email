@@ -54,6 +54,14 @@ type oauthSession struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
+type oauthStatusResponse struct {
+	State     string    `json:"state"`
+	Provider  string    `json:"provider"`
+	Status    string    `json:"status"`
+	Error     string    `json:"error,omitempty"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.health)
@@ -68,7 +76,7 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/api/v1/snapshot", s.requireAuth(http.HandlerFunc(s.snapshot)))
 	mux.Handle("/api/v1/accounts", s.requireAuth(http.HandlerFunc(s.accounts)))
 	mux.Handle("/api/v1/accounts/oauth/start", s.requireAuth(http.HandlerFunc(s.oauthStart)))
-	mux.HandleFunc("/api/v1/accounts/oauth/status", s.oauthStatus)
+	mux.Handle("/api/v1/accounts/oauth/status", s.requireAuth(http.HandlerFunc(s.oauthStatus)))
 	mux.HandleFunc("/api/v1/oauth/gmail/callback", s.oauthCallback("gmail"))
 	mux.HandleFunc("/api/v1/oauth/outlook/callback", s.oauthCallback("outlook"))
 	mux.Handle("/api/v1/accounts/", s.requireAuth(http.HandlerFunc(s.accountByID)))
@@ -176,7 +184,9 @@ func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
-	writeJSON(w, http.StatusOK, s.db.Snapshot())
+	snapshot := s.db.Snapshot()
+	snapshot.Settings = publicSettings(snapshot.Settings)
+	writeJSON(w, http.StatusOK, snapshot)
 }
 
 func (s *Server) accounts(w http.ResponseWriter, r *http.Request) {
@@ -327,7 +337,7 @@ func (s *Server) oauthStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, errors.New("oauth state not found"))
 		return
 	}
-	writeJSON(w, http.StatusOK, session)
+	writeJSON(w, http.StatusOK, publicOAuthSession(session))
 }
 
 func (s *Server) oauthCallback(provider string) http.HandlerFunc {
@@ -943,16 +953,41 @@ func (s *Server) ruleByID(w http.ResponseWriter, r *http.Request) {
 func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, http.StatusOK, s.db.Settings())
+		writeJSON(w, http.StatusOK, publicSettings(s.db.Settings()))
 	case http.MethodPut:
 		var req model.Settings
 		if err := readJSON(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, s.db.UpdateSettings(req))
+		current := s.db.Settings()
+		if strings.TrimSpace(req.GmailClientSecret) == "" {
+			req.GmailClientSecret = current.GmailClientSecret
+		}
+		if strings.TrimSpace(req.MicrosoftClientSecret) == "" {
+			req.MicrosoftClientSecret = current.MicrosoftClientSecret
+		}
+		writeJSON(w, http.StatusOK, publicSettings(s.db.UpdateSettings(req)))
 	default:
 		methodNotAllowed(w)
+	}
+}
+
+func publicSettings(settings model.Settings) model.Settings {
+	settings.HasGmailClientSecret = strings.TrimSpace(settings.GmailClientSecret) != ""
+	settings.HasMicrosoftClientSecret = strings.TrimSpace(settings.MicrosoftClientSecret) != ""
+	settings.GmailClientSecret = ""
+	settings.MicrosoftClientSecret = ""
+	return settings
+}
+
+func publicOAuthSession(session oauthSession) oauthStatusResponse {
+	return oauthStatusResponse{
+		State:     session.State,
+		Provider:  session.Provider,
+		Status:    session.Status,
+		Error:     session.Error,
+		UpdatedAt: session.UpdatedAt,
 	}
 }
 

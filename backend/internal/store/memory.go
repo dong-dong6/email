@@ -123,6 +123,13 @@ func (m *Memory) GetAccount(id string) (model.Account, bool) {
 func (m *Memory) UpdateAccount(account model.Account) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if account.Password == "" {
+		if existing, ok := m.accounts[account.ID]; ok {
+			account.Password = existing.Password
+		}
+	} else {
+		account.Password = m.secrets.Encrypt(account.Password)
+	}
 	account.UpdatedAt = time.Now()
 	m.accounts[account.ID] = account
 }

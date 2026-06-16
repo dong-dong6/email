@@ -1105,9 +1105,7 @@ class _AddAccountDialogState extends State<_AddAccountDialog> {
     super.initState();
     final settings = widget.state.snapshot?.settings;
     _gmailClientId.text = settings?.gmailClientId ?? '';
-    _gmailClientSecret.text = settings?.gmailClientSecret ?? '';
     _microsoftClientId.text = settings?.microsoftClientId ?? '';
-    _microsoftClientSecret.text = settings?.microsoftClientSecret ?? '';
   }
 
   @override
@@ -1149,6 +1147,7 @@ class _AddAccountDialogState extends State<_AddAccountDialog> {
                   clientSecretController: _provider == 'gmail'
                       ? _gmailClientSecret
                       : _microsoftClientSecret,
+                  hasSavedSecret: _hasSavedOAuthSecret,
                   onCopy: _copyOAuthUrl,
                 ),
               ] else ...[
@@ -1325,7 +1324,12 @@ class _AddAccountDialogState extends State<_AddAccountDialog> {
             : '请填写 Microsoft OAuth Client ID');
         return;
       }
-      if (clientSecret.isEmpty) {
+      final current =
+          widget.state.snapshot?.settings ?? MailboxSnapshot.empty().settings;
+      final clientIdChanged = _provider == 'gmail'
+          ? current.gmailClientId != clientId
+          : current.microsoftClientId != clientId;
+      if (clientSecret.isEmpty && (!_hasSavedOAuthSecret || clientIdChanged)) {
         setState(() => _formError = _provider == 'gmail'
             ? '请填写 Google OAuth Client Secret'
             : '请填写 Microsoft OAuth Client Secret');
@@ -1339,14 +1343,17 @@ class _AddAccountDialogState extends State<_AddAccountDialog> {
         _oauthStatusError = null;
       });
       _oauthPoller?.cancel();
-      final current =
-          widget.state.snapshot?.settings ?? MailboxSnapshot.empty().settings;
       await widget.state.updateSettings(
         current.copyWith(
           gmailClientId: _provider == 'gmail' ? clientId : null,
-          gmailClientSecret: _provider == 'gmail' ? clientSecret : null,
+          gmailClientSecret: _provider == 'gmail' && clientSecret.isNotEmpty
+              ? clientSecret
+              : null,
           microsoftClientId: _provider == 'outlook' ? clientId : null,
-          microsoftClientSecret: _provider == 'outlook' ? clientSecret : null,
+          microsoftClientSecret:
+              _provider == 'outlook' && clientSecret.isNotEmpty
+                  ? clientSecret
+                  : null,
         ),
       );
       if (!mounted) {
@@ -1476,6 +1483,17 @@ class _AddAccountDialogState extends State<_AddAccountDialog> {
 
   bool get _isOAuthProvider => _provider == 'gmail' || _provider == 'outlook';
 
+  bool get _hasSavedOAuthSecret {
+    final settings = widget.state.snapshot?.settings;
+    if (_provider == 'gmail') {
+      return settings?.hasGmailClientSecret ?? false;
+    }
+    if (_provider == 'outlook') {
+      return settings?.hasMicrosoftClientSecret ?? false;
+    }
+    return false;
+  }
+
   void _startOAuthPolling(String state) {
     _oauthPoller?.cancel();
     _checkOAuthStatus(state);
@@ -1533,6 +1551,7 @@ class _OAuthProviderPanel extends StatelessWidget {
     required this.oauthStatusError,
     required this.clientIdController,
     required this.clientSecretController,
+    required this.hasSavedSecret,
     required this.onCopy,
   });
 
@@ -1542,6 +1561,7 @@ class _OAuthProviderPanel extends StatelessWidget {
   final String? oauthStatusError;
   final TextEditingController clientIdController;
   final TextEditingController clientSecretController;
+  final bool hasSavedSecret;
   final VoidCallback onCopy;
 
   @override
@@ -1611,6 +1631,8 @@ class _OAuthProviderPanel extends StatelessWidget {
             labelText: isGmail
                 ? 'Google OAuth Client Secret'
                 : 'Microsoft OAuth Client Secret',
+            hintText: hasSavedSecret ? '已保存，留空不修改' : null,
+            helperText: hasSavedSecret ? 'Secret 只保存在后端，不会回填到客户端。' : null,
           ),
         ),
         const SizedBox(height: 12),

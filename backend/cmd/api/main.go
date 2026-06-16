@@ -51,7 +51,7 @@ func run() error {
 	var userStore auth.UserStore
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL != "" {
-		pgStore, err := store.NewPostgres(ctx, databaseURL)
+		pgStore, err := store.NewPostgres(ctx, databaseURL, cfg.MasterKey)
 		if err != nil {
 			slog.Warn("failed to connect to postgres, using config-based auth", "error", err)
 		} else {

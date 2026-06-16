@@ -207,8 +207,10 @@ class MailSettings {
     required this.signatureHtml,
     required this.gmailClientId,
     required this.gmailClientSecret,
+    required this.hasGmailClientSecret,
     required this.microsoftClientId,
     required this.microsoftClientSecret,
+    required this.hasMicrosoftClientSecret,
   });
 
   final bool remoteImagesDefault;
@@ -216,8 +218,10 @@ class MailSettings {
   final String signatureHtml;
   final String gmailClientId;
   final String gmailClientSecret;
+  final bool hasGmailClientSecret;
   final String microsoftClientId;
   final String microsoftClientSecret;
+  final bool hasMicrosoftClientSecret;
 
   factory MailSettings.fromJson(Map<String, dynamic> json) {
     return MailSettings(
@@ -226,8 +230,11 @@ class MailSettings {
       signatureHtml: json['signature_html'] as String? ?? '',
       gmailClientId: json['gmail_client_id'] as String? ?? '',
       gmailClientSecret: json['gmail_client_secret'] as String? ?? '',
+      hasGmailClientSecret: json['has_gmail_client_secret'] as bool? ?? false,
       microsoftClientId: json['microsoft_client_id'] as String? ?? '',
       microsoftClientSecret: json['microsoft_client_secret'] as String? ?? '',
+      hasMicrosoftClientSecret:
+          json['has_microsoft_client_secret'] as bool? ?? false,
     );
   }
 
@@ -237,8 +244,10 @@ class MailSettings {
     String? signatureHtml,
     String? gmailClientId,
     String? gmailClientSecret,
+    bool? hasGmailClientSecret,
     String? microsoftClientId,
     String? microsoftClientSecret,
+    bool? hasMicrosoftClientSecret,
   }) {
     return MailSettings(
       remoteImagesDefault: remoteImagesDefault ?? this.remoteImagesDefault,
@@ -246,9 +255,12 @@ class MailSettings {
       signatureHtml: signatureHtml ?? this.signatureHtml,
       gmailClientId: gmailClientId ?? this.gmailClientId,
       gmailClientSecret: gmailClientSecret ?? this.gmailClientSecret,
+      hasGmailClientSecret: hasGmailClientSecret ?? this.hasGmailClientSecret,
       microsoftClientId: microsoftClientId ?? this.microsoftClientId,
       microsoftClientSecret:
           microsoftClientSecret ?? this.microsoftClientSecret,
+      hasMicrosoftClientSecret:
+          hasMicrosoftClientSecret ?? this.hasMicrosoftClientSecret,
     );
   }
 
@@ -307,8 +319,10 @@ class MailboxSnapshot {
         signatureHtml: '<p>由自托管邮箱发送。</p>',
         gmailClientId: '',
         gmailClientSecret: '',
+        hasGmailClientSecret: false,
         microsoftClientId: '',
         microsoftClientSecret: '',
+        hasMicrosoftClientSecret: false,
       ),
     );
   }

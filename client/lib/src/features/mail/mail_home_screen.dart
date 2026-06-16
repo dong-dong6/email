@@ -735,16 +735,44 @@ class _FolderTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ListTile(
-      selected: selected,
-      selectedTileColor:
-          Theme.of(context).colorScheme.secondaryContainer.withOpacity(0.5),
-      leading: Icon(_folderIcon(folder.role)),
-      title: Text(_folderDisplayName(folder), overflow: TextOverflow.ellipsis),
-      trailing: folder.unreadCount == 0
-          ? null
-          : _CountBadge(count: folder.unreadCount),
-      onTap: onTap,
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      child: Material(
+        color: selected
+            ? scheme.secondaryContainer.withOpacity(0.5)
+            : Colors.transparent,
+        borderRadius: BorderRadius.circular(8),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(8),
+          onTap: onTap,
+          child: SizedBox(
+            height: 48,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: Row(
+                children: [
+                  Icon(
+                    _folderIcon(folder.role, selected: selected),
+                    color: selected ? scheme.primary : scheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Text(
+                      _folderDisplayName(folder),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  if (folder.unreadCount > 0) ...[
+                    const SizedBox(width: 8),
+                    _CountBadge(count: folder.unreadCount),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

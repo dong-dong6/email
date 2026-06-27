@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	netmail "net/mail"
 	"net/url"
 	"strconv"
 	"strings"
@@ -905,13 +906,66 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	req.AccountID = strings.TrimSpace(req.AccountID)
 	if req.AccountID == "" {
 		writeError(w, http.StatusBadRequest, errors.New("account_id is required"))
+		return
+	}
+	account, ok := s.db.GetAccount(req.AccountID)
+	if !ok {
+		writeError(w, http.StatusNotFound, store.ErrNotFound)
+		return
+	}
+	if _, ok := s.registry.For(account.Provider); !ok {
+		writeError(w, http.StatusBadRequest, errors.New("connector not found"))
+		return
+	}
+	if err := normalizeSendRequest(&req, account); err != nil {
+		writeError(w, http.StatusBadRequest, err)
 		return
 	}
 	item := s.db.EnqueueOutbox(req)
 	s.broker.Publish(model.Event{Type: "outbox.queued", AccountID: req.AccountID, Payload: item})
 	writeJSON(w, http.StatusAccepted, item)
+}
+
+func normalizeSendRequest(req *model.SendRequest, account model.Account) error {
+	req.AccountID = strings.TrimSpace(req.AccountID)
+	req.ThreadID = strings.TrimSpace(req.ThreadID)
+	req.Subject = strings.TrimSpace(req.Subject)
+	if len(req.To)+len(req.Cc)+len(req.Bcc) == 0 {
+		return errors.New("at least one recipient is required")
+	}
+	if err := normalizeAddressList("to", req.To); err != nil {
+		return err
+	}
+	if err := normalizeAddressList("cc", req.Cc); err != nil {
+		return err
+	}
+	if err := normalizeAddressList("bcc", req.Bcc); err != nil {
+		return err
+	}
+	req.From = &model.Address{Name: account.DisplayName, Email: account.Email}
+	return nil
+}
+
+func normalizeAddressList(field string, items []model.Address) error {
+	for index := range items {
+		items[index].Name = strings.TrimSpace(items[index].Name)
+		items[index].Email = strings.TrimSpace(items[index].Email)
+		if items[index].Email == "" {
+			return fmt.Errorf("%s[%d] email is required", field, index)
+		}
+		parsed, err := netmail.ParseAddress(items[index].Email)
+		if err != nil {
+			return fmt.Errorf("invalid %s[%d] email: %w", field, index, err)
+		}
+		if items[index].Name == "" {
+			items[index].Name = parsed.Name
+		}
+		items[index].Email = parsed.Address
+	}
+	return nil
 }
 
 func (s *Server) search(w http.ResponseWriter, r *http.Request) {

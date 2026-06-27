@@ -64,6 +64,30 @@ void main() {
       findsNothing,
     );
   });
+
+  testWidgets('keeps presentation table cells on the same row', (tester) async {
+    await _setSurface(tester, const Size(1280, 800));
+    final state = _mailState(
+      bodyHtml: '''
+<table role="presentation" width="600">
+  <tr>
+    <td align="center"><strong>208</strong></td>
+    <td align="center"><strong>10</strong></td>
+    <td align="center"><strong>1100</strong></td>
+  </tr>
+</table>
+''',
+    );
+
+    await tester.pumpWidget(EmailApp(state: state));
+
+    final firstTop = tester.getTopLeft(find.text('208', findRichText: true)).dy;
+    final secondTop = tester.getTopLeft(find.text('10', findRichText: true)).dy;
+    final thirdTop =
+        tester.getTopLeft(find.text('1100', findRichText: true)).dy;
+    expect((firstTop - secondTop).abs(), lessThan(2));
+    expect((firstTop - thirdTop).abs(), lessThan(2));
+  });
 }
 
 Future<void> _setSurface(WidgetTester tester, Size size) async {

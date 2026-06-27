@@ -297,37 +297,7 @@ List<Widget> _htmlTableToWidgets(
   if (_isDataTable(element)) {
     return [_HtmlTable(element: element, baseStyle: style)];
   }
-  return _htmlLayoutTableToWidgets(context, element, style);
-}
-
-List<Widget> _htmlLayoutTableToWidgets(
-  BuildContext context,
-  dom.Element element,
-  TextStyle style,
-) {
-  final out = <Widget>[];
-  for (final child in element.nodes) {
-    if (child is dom.Element) {
-      if (_isHiddenHtml(child)) {
-        continue;
-      }
-      final tag = child.localName?.toLowerCase() ?? '';
-      if (tag == 'tbody' || tag == 'thead' || tag == 'tfoot') {
-        out.addAll(_htmlLayoutTableToWidgets(context, child, style));
-        continue;
-      }
-      if (tag == 'tr') {
-        out.addAll(_htmlTableRowToWidgets(context, child, style));
-        continue;
-      }
-      if (tag == 'td' || tag == 'th') {
-        out.addAll(_htmlTableCellToWidgets(context, child, style));
-        continue;
-      }
-    }
-    out.addAll(_htmlNodeToWidgets(context, child, style));
-  }
-  return out;
+  return [_HtmlLayoutTable(element: element, baseStyle: style)];
 }
 
 List<Widget> _htmlTableRowToWidgets(
@@ -459,6 +429,236 @@ class _HtmlTable extends StatelessWidget {
       ),
     );
   }
+}
+
+class _HtmlLayoutTable extends StatelessWidget {
+  const _HtmlLayoutTable({required this.element, required this.baseStyle});
+
+  final dom.Element element;
+  final TextStyle baseStyle;
+
+  @override
+  Widget build(BuildContext context) {
+    final rows = _htmlLayoutRows(element)
+        .map((row) => row.where(_nodeHasReadableContent).toList())
+        .where((row) => row.isNotEmpty)
+        .toList(growable: false);
+    if (rows.isEmpty) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (final child in element.nodes)
+            ..._htmlNodeToWidgets(context, child, baseStyle),
+        ],
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Align(
+        alignment: _htmlAlignment(element),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final width = _htmlPreferredWidth(element, constraints.maxWidth);
+            final table = Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                for (final row in rows)
+                  _HtmlLayoutRow(cells: row, baseStyle: baseStyle),
+              ],
+            );
+            if (width == null) {
+              return table;
+            }
+            return SizedBox(width: width, child: table);
+          },
+        ),
+      ),
+    );
+  }
+}
+
+class _HtmlLayoutRow extends StatelessWidget {
+  const _HtmlLayoutRow({required this.cells, required this.baseStyle});
+
+  final List<dom.Element> cells;
+  final TextStyle baseStyle;
+
+  @override
+  Widget build(BuildContext context) {
+    if (cells.length == 1) {
+      return _HtmlLayoutCell(cell: cells.single, baseStyle: baseStyle);
+    }
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final stack = constraints.maxWidth < 360;
+        if (stack) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (final cell in cells)
+                _HtmlLayoutCell(cell: cell, baseStyle: baseStyle),
+            ],
+          );
+        }
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              for (var index = 0; index < cells.length; index++) ...[
+                if (index > 0) const SizedBox(width: 12),
+                Expanded(
+                  flex: _htmlCellFlex(cells[index]),
+                  child:
+                      _HtmlLayoutCell(cell: cells[index], baseStyle: baseStyle),
+                ),
+              ],
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _HtmlLayoutCell extends StatelessWidget {
+  const _HtmlLayoutCell({required this.cell, required this.baseStyle});
+
+  final dom.Element cell;
+  final TextStyle baseStyle;
+
+  @override
+  Widget build(BuildContext context) {
+    final children = [
+      for (final child in cell.nodes)
+        ..._htmlNodeToWidgets(context, child, baseStyle),
+    ];
+    if (children.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3, horizontal: 2),
+      child: Align(
+        alignment: _htmlAlignment(cell),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: children,
+        ),
+      ),
+    );
+  }
+}
+
+List<List<dom.Element>> _htmlLayoutRows(dom.Element table) {
+  final rows = <List<dom.Element>>[];
+  for (final child in table.children) {
+    if (_isHiddenHtml(child)) {
+      continue;
+    }
+    final tag = child.localName?.toLowerCase() ?? '';
+    if (tag == 'tr') {
+      final cells = _htmlDirectCells(child);
+      if (cells.isNotEmpty) {
+        rows.add(cells);
+      }
+      continue;
+    }
+    if (tag == 'tbody' || tag == 'thead' || tag == 'tfoot') {
+      for (final row in child.children) {
+        if (!_isHiddenHtml(row) && row.localName?.toLowerCase() == 'tr') {
+          final cells = _htmlDirectCells(row);
+          if (cells.isNotEmpty) {
+            rows.add(cells);
+          }
+        }
+      }
+    }
+  }
+  return rows;
+}
+
+List<dom.Element> _htmlDirectCells(dom.Element row) {
+  return row.children.where((item) {
+    final tag = item.localName?.toLowerCase();
+    return !_isHiddenHtml(item) && (tag == 'td' || tag == 'th');
+  }).toList(growable: false);
+}
+
+bool _nodeHasReadableContent(dom.Node node) {
+  if (node is dom.Text) {
+    return _readableTextNode(node.text).trim().isNotEmpty;
+  }
+  if (node is! dom.Element || _isHiddenHtml(node)) {
+    return false;
+  }
+  final tag = node.localName?.toLowerCase() ?? '';
+  if (tag == 'img' ||
+      tag == 'script' ||
+      tag == 'style' ||
+      tag == 'meta' ||
+      tag == 'link') {
+    return false;
+  }
+  if (tag == 'a') {
+    return _readableLinkText(
+      _plainText(node),
+      node.attributes['href']?.trim() ?? '',
+    ).isNotEmpty;
+  }
+  return node.nodes.any(_nodeHasReadableContent);
+}
+
+double? _htmlPreferredWidth(dom.Element element, double maxWidth) {
+  final declared = _htmlCssLength(element.attributes['width']) ??
+      _htmlCssLength(_styleDeclaration(element, 'width')) ??
+      _htmlCssLength(_styleDeclaration(element, 'max-width'));
+  if (declared == null || declared <= 0 || maxWidth.isInfinite) {
+    return null;
+  }
+  return math.min(declared, maxWidth);
+}
+
+int _htmlCellFlex(dom.Element cell) {
+  final colspan = int.tryParse(cell.attributes['colspan']?.trim() ?? '') ?? 1;
+  final width = cell.attributes['width'] ?? _styleDeclaration(cell, 'width');
+  final percent = RegExp(r'([0-9]+(?:\.[0-9]+)?)%').firstMatch(width ?? '');
+  if (percent != null) {
+    final value = double.tryParse(percent.group(1) ?? '');
+    if (value != null && value > 0) {
+      return value.clamp(1, 100).round();
+    }
+  }
+  return colspan.clamp(1, 6).toInt();
+}
+
+double? _htmlCssLength(String? value) {
+  if (value == null) {
+    return null;
+  }
+  final match =
+      RegExp(r'^\s*([0-9]+(?:\.[0-9]+)?)(?:px)?\s*$', caseSensitive: false)
+          .firstMatch(value);
+  if (match == null) {
+    return null;
+  }
+  return double.tryParse(match.group(1) ?? '');
+}
+
+String? _styleDeclaration(dom.Element element, String property) {
+  final style = element.attributes['style'];
+  if (style == null || style.trim().isEmpty) {
+    return null;
+  }
+  for (final declaration in style.split(';')) {
+    final parts = declaration.split(':');
+    if (parts.length < 2) {
+      continue;
+    }
+    if (parts.first.trim().toLowerCase() == property) {
+      return parts.sublist(1).join(':').trim();
+    }
+  }
+  return null;
 }
 
 bool _hasBlockChildren(dom.Element element) {

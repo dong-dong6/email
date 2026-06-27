@@ -39,6 +39,31 @@ void main() {
     expect(find.text('抄送 Cc'), findsOneWidget);
     expect(find.text('密送 Bcc'), findsOneWidget);
   });
+
+  testWidgets('renders html mail without image and tracking noise',
+      (tester) async {
+    await _setSurface(tester, const Size(1280, 800));
+    const trackingUrl =
+        'https://click.redditmail.com/CLO/https:%2F%2Fwww.reddit.com%2Fr%2FOpenAI%2Fcomments%2Fabc';
+    final state = _mailState(
+      bodyHtml: '''
+<table role="presentation">
+  <tr><td><img src="https://example.com/pixel.png" alt="tracking"></td></tr>
+  <tr><td>请查看 <a href="https://example.com/terms">服务条款</a></td></tr>
+  <tr><td><a href="$trackingUrl">$trackingUrl</a></td></tr>
+</table>
+''',
+    );
+
+    await tester.pumpWidget(EmailApp(state: state));
+
+    expect(find.textContaining('服务条款', findRichText: true), findsOneWidget);
+    expect(find.textContaining('[图片]', findRichText: true), findsNothing);
+    expect(
+      find.textContaining('click.redditmail.com', findRichText: true),
+      findsNothing,
+    );
+  });
 }
 
 Future<void> _setSurface(WidgetTester tester, Size size) async {
@@ -50,7 +75,7 @@ Future<void> _setSurface(WidgetTester tester, Size size) async {
   });
 }
 
-AppState _mailState() {
+AppState _mailState({String bodyHtml = '', String bodyText = '请看新的工作台布局。'}) {
   final now = DateTime(2026, 6, 17, 9, 30);
   final state = AppState(ApiClient('http://localhost:8080'))
     ..isAuthenticated = true
@@ -96,8 +121,8 @@ AppState _mailState() {
           bcc: const [Address(email: 'secret@example.com')],
           subject: '设计评审',
           snippet: '请看新的工作台布局。',
-          bodyText: '请看新的工作台布局。',
-          bodyHtml: '',
+          bodyText: bodyText,
+          bodyHtml: bodyHtml,
           isRead: false,
           isStarred: true,
           labels: const ['inbox'],

@@ -5,20 +5,20 @@ String _sanitizeMailHtml(String html) {
   if (value.isEmpty) {
     return '';
   }
+  value = value.replaceAll(RegExp(r'<!--.*?-->', dotAll: true), '');
   value = value.replaceAll(
       RegExp(
-          r'<\s*(script|style|iframe|object|embed|form)\b[^>]*>.*?<\s*/\s*\1\s*>',
+          r'<\s*(script|style|head|iframe|object|embed|form)\b[^>]*>.*?<\s*/\s*\1\s*>',
           caseSensitive: false,
           dotAll: true),
       '');
   value = value.replaceAll(
-      RegExp(r'<\s*(script|style|iframe|object|embed|form)\b[^>]*/?\s*>',
+      RegExp(
+          r'<\s*(script|style|meta|link|iframe|object|embed|form)\b[^>]*/?\s*>',
           caseSensitive: false),
       '');
-  value = value.replaceAll(
-      RegExp(r"<img\b[^>]*\bsrc\s*=\s*[" "']https?:[^>]*>",
-          caseSensitive: false),
-      '');
+  value =
+      value.replaceAll(RegExp(r'<\s*img\b[^>]*>', caseSensitive: false), '');
   value = value.replaceAll(
       RegExp(r"\son[a-z]+\s*=\s*([" "']).*?\1",
           caseSensitive: false, dotAll: true),
@@ -37,18 +37,21 @@ List<Widget> _htmlNodeToWidgets(
 ) {
   final scheme = Theme.of(context).colorScheme;
   if (node is dom.Text) {
-    final text = _softWrapLongRuns(node.text.replaceAll(RegExp(r'\s+'), ' '));
-    if (text.trim().isEmpty) {
+    final text = _readableTextNode(node.text);
+    if (text.isEmpty) {
       return const [];
     }
     return [
       Padding(
         padding: const EdgeInsets.only(bottom: 10),
-        child: SelectableText(text.trim(), style: style),
+        child: SelectableText(_softWrapLongRuns(text), style: style),
       ),
     ];
   }
   if (node is! dom.Element) {
+    return const [];
+  }
+  if (_isHiddenHtml(node)) {
     return const [];
   }
   final tag = node.localName?.toLowerCase() ?? '';
@@ -61,18 +64,23 @@ List<Widget> _htmlNodeToWidgets(
     case 'br':
       return const [SizedBox(height: 8)];
     case 'img':
-      return [_HtmlImagePlaceholder(element: node)];
+      return const [];
     case 'a':
-      final href = node.attributes['href']?.trim() ?? '';
+      final spans = _htmlInlineSpans(context, node.nodes, style);
+      if (_isBlankSpans(spans)) {
+        return const [];
+      }
       return [
-        Align(
-          alignment: align,
-          child: _HtmlLinkChip(
-            text: _plainText(node).isEmpty ? href : _plainText(node),
-            href: href,
+        Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: Align(
+            alignment: align,
+            child: SelectableText.rich(
+              TextSpan(style: style, children: spans),
+              textAlign: _htmlTextAlign(node),
+            ),
           ),
         ),
-        const SizedBox(height: 12),
       ];
     case 'h1':
     case 'h2':
@@ -122,7 +130,7 @@ List<Widget> _htmlNodeToWidgets(
       }
       final spans = _htmlInlineSpans(context, node.nodes, style);
       if (_isBlankSpans(spans)) {
-        return const [SizedBox(height: 10)];
+        return const [];
       }
       return [
         Padding(
@@ -155,7 +163,12 @@ List<Widget> _htmlNodeToWidgets(
         ),
       ];
     case 'table':
-      return [_HtmlTable(element: node, baseStyle: style)];
+      return _htmlTableToWidgets(context, node, style);
+    case 'tr':
+      return _htmlTableRowToWidgets(context, node, style);
+    case 'td':
+    case 'th':
+      return _htmlTableCellToWidgets(context, node, style);
     case 'tbody':
     case 'thead':
     case 'tfoot':
@@ -203,13 +216,16 @@ List<InlineSpan> _htmlNodeToInlineSpans(
   Color linkColor,
 ) {
   if (node is dom.Text) {
-    final text = _softWrapLongRuns(node.text.replaceAll(RegExp(r'\s+'), ' '));
-    if (text.trim().isEmpty) {
+    final text = _readableTextNode(node.text, trim: false);
+    if (text.isEmpty) {
       return const [];
     }
-    return [TextSpan(text: text, style: style)];
+    return [TextSpan(text: _softWrapLongRuns(text), style: style)];
   }
   if (node is! dom.Element) {
+    return const [];
+  }
+  if (_isHiddenHtml(node)) {
     return const [];
   }
   final tag = node.localName?.toLowerCase() ?? '';
@@ -217,15 +233,7 @@ List<InlineSpan> _htmlNodeToInlineSpans(
     case 'br':
       return const [TextSpan(text: '\n')];
     case 'img':
-      final alt = node.attributes['alt']?.trim();
-      return [
-        TextSpan(
-          text: alt == null || alt.isEmpty
-              ? '[图片]'
-              : '[图片: ${_softWrapLongRuns(alt)}]',
-          style: style.copyWith(color: linkColor),
-        ),
-      ];
+      return const [];
     case 'strong':
     case 'b':
       return _htmlChildrenToInlineSpans(
@@ -248,7 +256,7 @@ List<InlineSpan> _htmlNodeToInlineSpans(
     case 'a':
       final href = node.attributes['href']?.trim() ?? '';
       final label = _plainText(node).trim();
-      final text = label.isEmpty ? href : label;
+      final text = _readableLinkText(label, href);
       if (text.isEmpty) {
         return const [];
       }
@@ -281,78 +289,81 @@ List<InlineSpan> _htmlChildrenToInlineSpans(
   ];
 }
 
-class _HtmlLinkChip extends StatelessWidget {
-  const _HtmlLinkChip({required this.text, required this.href});
-
-  final String text;
-  final String href;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final label = text.trim().isEmpty ? href : text.trim();
-    return Container(
-      constraints: const BoxConstraints(maxWidth: 520),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      decoration: BoxDecoration(
-        color: scheme.primaryContainer.withOpacity(0.55),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: scheme.primary.withOpacity(0.18)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.link_rounded, color: scheme.primary, size: 18),
-          const SizedBox(width: 8),
-          Flexible(
-            child: SelectableText(
-              _softWrapLongRuns(label),
-              style: TextStyle(
-                color: scheme.primary,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
+List<Widget> _htmlTableToWidgets(
+  BuildContext context,
+  dom.Element element,
+  TextStyle style,
+) {
+  if (_isDataTable(element)) {
+    return [_HtmlTable(element: element, baseStyle: style)];
   }
+  return _htmlLayoutTableToWidgets(context, element, style);
 }
 
-class _HtmlImagePlaceholder extends StatelessWidget {
-  const _HtmlImagePlaceholder({required this.element});
-
-  final dom.Element element;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final alt = element.attributes['alt']?.trim() ?? '';
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 14),
-      child: Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: scheme.surfaceContainerHighest.withOpacity(0.7),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: scheme.outlineVariant),
-        ),
-        child: Row(
-          children: [
-            Icon(Icons.image_not_supported_outlined,
-                color: scheme.onSurfaceVariant),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                alt.isEmpty ? '远程图片已阻止' : '远程图片已阻止：$alt',
-                style: TextStyle(color: scheme.onSurfaceVariant),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
+List<Widget> _htmlLayoutTableToWidgets(
+  BuildContext context,
+  dom.Element element,
+  TextStyle style,
+) {
+  final out = <Widget>[];
+  for (final child in element.nodes) {
+    if (child is dom.Element) {
+      if (_isHiddenHtml(child)) {
+        continue;
+      }
+      final tag = child.localName?.toLowerCase() ?? '';
+      if (tag == 'tbody' || tag == 'thead' || tag == 'tfoot') {
+        out.addAll(_htmlLayoutTableToWidgets(context, child, style));
+        continue;
+      }
+      if (tag == 'tr') {
+        out.addAll(_htmlTableRowToWidgets(context, child, style));
+        continue;
+      }
+      if (tag == 'td' || tag == 'th') {
+        out.addAll(_htmlTableCellToWidgets(context, child, style));
+        continue;
+      }
+    }
+    out.addAll(_htmlNodeToWidgets(context, child, style));
   }
+  return out;
+}
+
+List<Widget> _htmlTableRowToWidgets(
+  BuildContext context,
+  dom.Element row,
+  TextStyle style,
+) {
+  if (_isHiddenHtml(row)) {
+    return const [];
+  }
+  final cells = row.children
+      .where((item) => item.localName == 'td' || item.localName == 'th')
+      .toList(growable: false);
+  if (cells.isEmpty) {
+    return [
+      for (final child in row.nodes)
+        ..._htmlNodeToWidgets(context, child, style),
+    ];
+  }
+  return [
+    for (final cell in cells) ..._htmlTableCellToWidgets(context, cell, style),
+  ];
+}
+
+List<Widget> _htmlTableCellToWidgets(
+  BuildContext context,
+  dom.Element cell,
+  TextStyle style,
+) {
+  if (_isHiddenHtml(cell)) {
+    return const [];
+  }
+  return [
+    for (final child in cell.nodes)
+      ..._htmlNodeToWidgets(context, child, style),
+  ];
 }
 
 class _HtmlListItem extends StatelessWidget {
@@ -396,7 +407,12 @@ class _HtmlTable extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final rows = element.querySelectorAll('tr');
+    final rows = [
+      for (final row in element.querySelectorAll('tr'))
+        row.children
+            .where((item) => item.localName == 'td' || item.localName == 'th')
+            .toList(growable: false),
+    ].where((cells) => cells.isNotEmpty).toList(growable: false);
     if (rows.isEmpty) {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -415,11 +431,10 @@ class _HtmlTable extends StatelessWidget {
           defaultColumnWidth: const IntrinsicColumnWidth(),
           border: TableBorder.all(color: scheme.outlineVariant),
           children: [
-            for (final row in rows)
+            for (final cells in rows)
               TableRow(
                 children: [
-                  for (final cell in row.children.where((item) =>
-                      item.localName == 'td' || item.localName == 'th'))
+                  for (final cell in cells)
                     Container(
                       constraints: const BoxConstraints(minWidth: 96),
                       padding: const EdgeInsets.all(10),
@@ -466,6 +481,12 @@ bool _hasBlockChildren(dom.Element element) {
     'p',
     'section',
     'table',
+    'tbody',
+    'td',
+    'tfoot',
+    'th',
+    'thead',
+    'tr',
     'ul',
   };
   return element.children.any((child) => blockTags.contains(child.localName));
@@ -527,6 +548,100 @@ TextStyle _styleFromHtml(dom.Element element, TextStyle base) {
     out = out.copyWith(fontStyle: FontStyle.italic);
   }
   return out;
+}
+
+bool _isHiddenHtml(dom.Element element) {
+  if (element.attributes.containsKey('hidden')) {
+    return true;
+  }
+  if (element.attributes['aria-hidden']?.toLowerCase() == 'true') {
+    return true;
+  }
+  final style = (element.attributes['style'] ?? '')
+      .toLowerCase()
+      .replaceAll(RegExp(r'\s+'), '');
+  if (style.contains('display:none') ||
+      style.contains('visibility:hidden') ||
+      style.contains('mso-hide:all')) {
+    return true;
+  }
+  return style.contains('max-height:0') && style.contains('overflow:hidden');
+}
+
+bool _isDataTable(dom.Element element) {
+  final role = element.attributes['role']?.toLowerCase();
+  if (role == 'presentation') {
+    return false;
+  }
+  if (role == 'grid' || role == 'table') {
+    return true;
+  }
+  if (element.querySelectorAll('th').isNotEmpty) {
+    return true;
+  }
+  final border = int.tryParse(element.attributes['border']?.trim() ?? '');
+  return border != null && border > 0;
+}
+
+String _readableLinkText(String label, String href) {
+  final text = label.replaceAll(RegExp(r'\s+'), ' ').trim();
+  if (text.isEmpty) {
+    return '';
+  }
+  if (_looksLikeUrl(text)) {
+    if (_isTrackingUrl(text) || _isTrackingUrl(href)) {
+      return '';
+    }
+    if (text.length > 96 || text.contains('%')) {
+      return _urlHost(text);
+    }
+  }
+  return text;
+}
+
+String _readableTextNode(String value, {bool trim = true}) {
+  final collapsed = value.replaceAll(RegExp(r'\s+'), ' ');
+  final text = collapsed.trim();
+  if (text.isEmpty) {
+    return '';
+  }
+  if (_looksLikeUrl(text)) {
+    return _readableLinkText(text, text);
+  }
+  return trim ? text : collapsed;
+}
+
+bool _looksLikeUrl(String value) {
+  return RegExp(r'^https?://', caseSensitive: false).hasMatch(value.trim());
+}
+
+bool _isTrackingUrl(String value) {
+  final normalized = value.trim().toLowerCase();
+  if (normalized.contains('redditmail.com') ||
+      normalized.contains('doubleclick.net') ||
+      normalized.contains('googleadservices.com') ||
+      normalized.startsWith('https://click.') ||
+      normalized.startsWith('http://click.')) {
+    return true;
+  }
+  final uri = Uri.tryParse(normalized);
+  final host = uri?.host.toLowerCase() ?? '';
+  if (host.isEmpty) {
+    return false;
+  }
+  return host.contains('redditmail.com') ||
+      host.contains('doubleclick.net') ||
+      host.contains('googleadservices.com') ||
+      host.startsWith('click.') ||
+      (host == 'www.google.com' && (uri?.path ?? '').startsWith('/url'));
+}
+
+String _urlHost(String value) {
+  final host = Uri.tryParse(value.trim())?.host;
+  if (host == null || host.isEmpty) {
+    return '';
+  }
+  return host.replaceFirst(RegExp(r'^www\.'), '');
 }
 
 String _selectedFolderTitle(AppState state) {

@@ -12,10 +12,19 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"email/backend/internal/model"
 )
+
+const (
+	gmailInitialSyncLimit = 50
+	gmailFetchWorkers     = 4
+	gmailSyncCursorPrefix = "gmail:history:"
+)
+
+var oauthHTTPClient = &http.Client{Timeout: 25 * time.Second}
 
 type oauthToken struct {
 	AccessToken  string `json:"access_token"`
@@ -132,52 +141,281 @@ func (c OAuthAPIConnector) refreshToken(ctx context.Context, token oauthToken) (
 }
 
 func (c OAuthAPIConnector) syncGmail(ctx context.Context, account model.Account, folder model.Folder, accessToken string) error {
-	slog.Info("gmail list request started", "account_id", account.ID, "email", account.Email, "folder_id", folder.ID)
-	var list struct {
-		Messages []struct {
-			ID string `json:"id"`
-		} `json:"messages"`
+	if historyID, ok := parseGmailHistoryCursor(account.SyncCursor); ok {
+		if err := c.syncGmailHistory(ctx, account, folder, accessToken, historyID); err != nil {
+			if !isGmailHistoryExpired(err) {
+				return err
+			}
+			slog.Warn("gmail history cursor expired, falling back to full sync", "account_id", account.ID, "email", account.Email, "history_id", historyID, "error", err)
+		} else {
+			return nil
+		}
 	}
-	req, err := oauthGET(ctx, "https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=25&q=in%3Ainbox", accessToken)
+	return c.syncGmailFull(ctx, account, folder, accessToken)
+}
+
+func (c OAuthAPIConnector) syncGmailFull(ctx context.Context, account model.Account, folder model.Folder, accessToken string) error {
+	slog.Info("gmail full sync started", "account_id", account.ID, "email", account.Email, "folder_id", folder.ID, "limit", gmailInitialSyncLimit)
+	historyID, err := c.fetchGmailProfileHistoryID(ctx, accessToken)
+	if err != nil {
+		slog.Warn("gmail profile history id fetch failed", "account_id", account.ID, "email", account.Email, "error", err)
+	}
+	var list gmailListResponse
+	req, err := oauthGET(ctx, gmailFullListEndpoint(), accessToken)
 	if err != nil {
 		return err
 	}
 	if err := doJSON(req, &list); err != nil {
 		return fmt.Errorf("拉取 Gmail 邮件列表失败: %w", err)
 	}
-	slog.Info("gmail list request completed", "account_id", account.ID, "email", account.Email, "message_count", len(list.Messages))
-	synced := 0
-	failed := 0
+	ids := make([]string, 0, len(list.Messages))
 	for _, item := range list.Messages {
 		if strings.TrimSpace(item.ID) == "" {
 			continue
 		}
-		msg, err := c.fetchGmailMessage(ctx, account, folder, accessToken, item.ID)
-		if err != nil {
-			failed++
-			slog.Warn("gmail message fetch failed", "account_id", account.ID, "email", account.Email, "provider_id", item.ID, "error", err)
-			continue
-		}
-		if existing, ok := c.db.FindMessageByProvider(account.ID, msg.ProviderID); ok {
-			msg.ID = existing.ID
-			msg.CreatedAt = existing.CreatedAt
-		}
-		msg = c.db.UpsertMessage(msg)
-		c.broker.Publish(model.Event{Type: "message.synced", AccountID: account.ID, MessageID: msg.ID, Payload: msg})
-		synced++
+		ids = append(ids, item.ID)
 	}
-	slog.Info("gmail messages synced", "account_id", account.ID, "email", account.Email, "synced", synced, "failed", failed)
+	result := c.fetchAndStoreGmailMessages(ctx, account, folder, accessToken, ids, nil)
+	if historyID == "" {
+		historyID = result.LatestHistoryID
+	}
+	if result.Failed > 0 {
+		return fmt.Errorf("Gmail 部分邮件拉取失败: %d", result.Failed)
+	}
+	c.saveGmailHistoryCursor(account, historyID)
+	slog.Info("gmail full sync completed", "account_id", account.ID, "email", account.Email, "listed", len(list.Messages), "synced", result.Synced, "skipped", result.Skipped, "failed", result.Failed, "history_id", historyID)
 	return nil
 }
 
-func (c OAuthAPIConnector) fetchGmailMessage(ctx context.Context, account model.Account, folder model.Folder, accessToken string, id string) (model.Message, error) {
-	var raw gmailMessage
-	req, err := oauthGET(ctx, "https://gmail.googleapis.com/gmail/v1/users/me/messages/"+url.PathEscape(id)+"?format=full", accessToken)
+func (c OAuthAPIConnector) syncGmailHistory(ctx context.Context, account model.Account, folder model.Folder, accessToken string, startHistoryID string) error {
+	slog.Info("gmail history sync started", "account_id", account.ID, "email", account.Email, "start_history_id", startHistoryID)
+	var ids []string
+	forceRefresh := map[string]bool{}
+	removedFromInbox := map[string]bool{}
+	latestHistoryID := ""
+	pageToken := ""
+	pages := 0
+	for {
+		var history gmailHistoryResponse
+		req, err := oauthGET(ctx, gmailHistoryEndpoint(startHistoryID, pageToken), accessToken)
+		if err != nil {
+			return err
+		}
+		if err := doJSON(req, &history); err != nil {
+			return fmt.Errorf("拉取 Gmail 增量历史失败: %w", err)
+		}
+		pages++
+		latestHistoryID = newerGmailHistoryID(latestHistoryID, history.HistoryID)
+		for _, entry := range history.History {
+			latestHistoryID = newerGmailHistoryID(latestHistoryID, entry.ID)
+			for _, item := range entry.MessagesAdded {
+				id := strings.TrimSpace(item.Message.ID)
+				if id == "" {
+					continue
+				}
+				delete(removedFromInbox, id)
+				ids = append(ids, id)
+				latestHistoryID = newerGmailHistoryID(latestHistoryID, item.Message.HistoryID)
+			}
+			for _, item := range entry.LabelsAdded {
+				id := strings.TrimSpace(item.Message.ID)
+				if id == "" {
+					continue
+				}
+				ids = append(ids, id)
+				forceRefresh[id] = true
+				delete(removedFromInbox, id)
+				latestHistoryID = newerGmailHistoryID(latestHistoryID, item.Message.HistoryID)
+			}
+			for _, item := range entry.LabelsRemoved {
+				id := strings.TrimSpace(item.Message.ID)
+				if id == "" {
+					continue
+				}
+				latestHistoryID = newerGmailHistoryID(latestHistoryID, item.Message.HistoryID)
+				if containsString(item.LabelIDs, "INBOX") {
+					removedFromInbox[id] = true
+					delete(forceRefresh, id)
+					continue
+				}
+				if removedFromInbox[id] {
+					continue
+				}
+				ids = append(ids, id)
+				forceRefresh[id] = true
+			}
+			for _, item := range entry.MessagesDeleted {
+				id := strings.TrimSpace(item.Message.ID)
+				if id == "" {
+					continue
+				}
+				removedFromInbox[id] = true
+				delete(forceRefresh, id)
+				latestHistoryID = newerGmailHistoryID(latestHistoryID, item.Message.HistoryID)
+			}
+		}
+		if strings.TrimSpace(history.NextPageToken) == "" {
+			break
+		}
+		pageToken = history.NextPageToken
+	}
+	deleted := c.deleteGmailMessages(account, removedFromInbox, forceRefresh)
+	fetchIDs := filterDeletedGmailIDs(ids, removedFromInbox, forceRefresh)
+	result := c.fetchAndStoreGmailMessages(ctx, account, folder, accessToken, fetchIDs, forceRefresh)
+	latestHistoryID = newerGmailHistoryID(latestHistoryID, result.LatestHistoryID)
+	if latestHistoryID == "" {
+		latestHistoryID = startHistoryID
+	}
+	if result.Failed > 0 {
+		return fmt.Errorf("Gmail 部分增量邮件拉取失败: %d", result.Failed)
+	}
+	c.saveGmailHistoryCursor(account, latestHistoryID)
+	slog.Info("gmail history sync completed", "account_id", account.ID, "email", account.Email, "pages", pages, "changed", len(ids), "synced", result.Synced, "skipped", result.Skipped, "deleted", deleted, "failed", result.Failed, "history_id", latestHistoryID)
+	return nil
+}
+
+func (c OAuthAPIConnector) fetchGmailProfileHistoryID(ctx context.Context, accessToken string) (string, error) {
+	var profile gmailProfile
+	req, err := oauthGET(ctx, "https://gmail.googleapis.com/gmail/v1/users/me/profile?fields=historyId", accessToken)
 	if err != nil {
-		return model.Message{}, err
+		return "", err
+	}
+	if err := doJSON(req, &profile); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(profile.HistoryID), nil
+}
+
+type gmailFetchResult struct {
+	Synced          int
+	Skipped         int
+	Failed          int
+	LatestHistoryID string
+}
+
+type gmailFetchOutcome struct {
+	ID        string
+	Message   model.Message
+	HistoryID string
+	Skipped   bool
+	Err       error
+}
+
+func (c OAuthAPIConnector) fetchAndStoreGmailMessages(ctx context.Context, account model.Account, folder model.Folder, accessToken string, ids []string, forceRefresh map[string]bool) gmailFetchResult {
+	ids = dedupeGmailIDs(ids)
+	result := gmailFetchResult{}
+	if len(ids) == 0 {
+		return result
+	}
+	workerCount := gmailFetchWorkers
+	if len(ids) < workerCount {
+		workerCount = len(ids)
+	}
+	jobs := make(chan string)
+	outcomes := make(chan gmailFetchOutcome)
+	var wg sync.WaitGroup
+	for i := 0; i < workerCount; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for id := range jobs {
+				providerID := "gmail:" + id
+				existing, ok := c.db.FindMessageByProvider(account.ID, providerID)
+				if ok && !forceRefresh[id] {
+					outcomes <- gmailFetchOutcome{ID: id, Skipped: true}
+					continue
+				}
+				msg, historyID, err := c.fetchGmailMessage(ctx, account, folder, accessToken, id)
+				if err != nil {
+					if isAPIStatus(err, http.StatusNotFound, http.StatusGone) {
+						outcomes <- gmailFetchOutcome{ID: id, Skipped: true}
+						continue
+					}
+					outcomes <- gmailFetchOutcome{ID: id, Err: err}
+					continue
+				}
+				if ok {
+					msg.ID = existing.ID
+					msg.CreatedAt = existing.CreatedAt
+				}
+				outcomes <- gmailFetchOutcome{ID: id, Message: msg, HistoryID: historyID}
+			}
+		}()
+	}
+	go func() {
+		defer close(jobs)
+		for _, id := range ids {
+			select {
+			case <-ctx.Done():
+				return
+			case jobs <- id:
+			}
+		}
+	}()
+	go func() {
+		wg.Wait()
+		close(outcomes)
+	}()
+	for outcome := range outcomes {
+		if outcome.Skipped {
+			result.Skipped++
+			continue
+		}
+		if outcome.Err != nil {
+			result.Failed++
+			slog.Warn("gmail message fetch failed", "account_id", account.ID, "email", account.Email, "provider_id", outcome.ID, "error", outcome.Err)
+			continue
+		}
+		msg := c.db.UpsertMessage(outcome.Message)
+		c.broker.Publish(model.Event{Type: "message.synced", AccountID: account.ID, MessageID: msg.ID, Payload: msg})
+		result.LatestHistoryID = newerGmailHistoryID(result.LatestHistoryID, outcome.HistoryID)
+		result.Synced++
+	}
+	return result
+}
+
+func (c OAuthAPIConnector) deleteGmailMessages(account model.Account, ids map[string]bool, forceRefresh map[string]bool) int {
+	deleted := 0
+	for id := range ids {
+		if forceRefresh[id] {
+			continue
+		}
+		existing, ok := c.db.FindMessageByProvider(account.ID, "gmail:"+id)
+		if !ok {
+			continue
+		}
+		if err := c.db.DeleteMessage(existing.ID); err != nil {
+			slog.Warn("gmail local message delete failed", "account_id", account.ID, "email", account.Email, "provider_id", id, "message_id", existing.ID, "error", err)
+			continue
+		}
+		c.broker.Publish(model.Event{Type: "message.deleted", AccountID: account.ID, MessageID: existing.ID})
+		deleted++
+	}
+	return deleted
+}
+
+func (c OAuthAPIConnector) saveGmailHistoryCursor(account model.Account, historyID string) {
+	historyID = strings.TrimSpace(historyID)
+	if historyID == "" {
+		return
+	}
+	if current, ok := c.db.GetAccount(account.ID); ok {
+		current.SyncCursor = gmailSyncCursorPrefix + historyID
+		c.db.UpdateAccount(current)
+		return
+	}
+	account.SyncCursor = gmailSyncCursorPrefix + historyID
+	c.db.UpdateAccount(account)
+}
+
+func (c OAuthAPIConnector) fetchGmailMessage(ctx context.Context, account model.Account, folder model.Folder, accessToken string, id string) (model.Message, string, error) {
+	var raw gmailMessage
+	req, err := oauthGET(ctx, gmailMessageEndpoint(id), accessToken)
+	if err != nil {
+		return model.Message{}, "", err
 	}
 	if err := doJSON(req, &raw); err != nil {
-		return model.Message{}, err
+		return model.Message{}, "", err
 	}
 	headers := gmailHeaders(raw.Payload.Headers)
 	receivedAt := time.Now()
@@ -208,7 +446,7 @@ func (c OAuthAPIConnector) fetchGmailMessage(ctx context.Context, account model.
 		Labels:     labels,
 		CreatedAt:  time.Now(),
 		UpdatedAt:  time.Now(),
-	}, nil
+	}, strings.TrimSpace(raw.HistoryID), nil
 }
 
 func (c OAuthAPIConnector) syncOutlook(ctx context.Context, account model.Account, folder model.Folder, accessToken string) error {
@@ -269,23 +507,142 @@ func oauthGET(ctx context.Context, endpoint string, accessToken string) (*http.R
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "self-hosted-mail/1.0 (gzip)")
 	return req, nil
 }
 
 func doJSON(req *http.Request, out any) error {
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := oauthHTTPClient.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(body)))
+		return &apiError{StatusCode: resp.StatusCode, Status: resp.Status, Body: strings.TrimSpace(string(body))}
 	}
 	if len(body) == 0 {
 		return nil
 	}
 	return json.Unmarshal(body, out)
+}
+
+type apiError struct {
+	StatusCode int
+	Status     string
+	Body       string
+}
+
+func (e *apiError) Error() string {
+	if e.Body == "" {
+		return e.Status
+	}
+	return e.Status + ": " + e.Body
+}
+
+func gmailFullListEndpoint() string {
+	values := url.Values{}
+	values.Set("labelIds", "INBOX")
+	values.Set("maxResults", strconv.Itoa(gmailInitialSyncLimit))
+	values.Set("fields", "messages(id,threadId),nextPageToken,resultSizeEstimate")
+	return "https://gmail.googleapis.com/gmail/v1/users/me/messages?" + values.Encode()
+}
+
+func gmailHistoryEndpoint(startHistoryID string, pageToken string) string {
+	values := url.Values{}
+	values.Set("startHistoryId", startHistoryID)
+	values.Set("labelId", "INBOX")
+	values.Add("historyTypes", "messageAdded")
+	values.Add("historyTypes", "messageDeleted")
+	values.Add("historyTypes", "labelAdded")
+	values.Add("historyTypes", "labelRemoved")
+	values.Set("fields", "history(id,messagesAdded(message(id,threadId,labelIds,historyId)),messagesDeleted(message(id,threadId,historyId)),labelsAdded(message(id,threadId,labelIds,historyId),labelIds),labelsRemoved(message(id,threadId,labelIds,historyId),labelIds)),nextPageToken,historyId")
+	if strings.TrimSpace(pageToken) != "" {
+		values.Set("pageToken", pageToken)
+	}
+	return "https://gmail.googleapis.com/gmail/v1/users/me/history?" + values.Encode()
+}
+
+func gmailMessageEndpoint(id string) string {
+	values := url.Values{}
+	values.Set("format", "full")
+	values.Set("fields", "id,threadId,labelIds,snippet,internalDate,historyId,payload")
+	return "https://gmail.googleapis.com/gmail/v1/users/me/messages/" + url.PathEscape(id) + "?" + values.Encode()
+}
+
+func parseGmailHistoryCursor(cursor string) (string, bool) {
+	cursor = strings.TrimSpace(cursor)
+	if !strings.HasPrefix(cursor, gmailSyncCursorPrefix) {
+		return "", false
+	}
+	historyID := strings.TrimSpace(strings.TrimPrefix(cursor, gmailSyncCursorPrefix))
+	return historyID, historyID != ""
+}
+
+func isGmailHistoryExpired(err error) bool {
+	return isAPIStatus(err, http.StatusNotFound, http.StatusGone)
+}
+
+func isAPIStatus(err error, statusCodes ...int) bool {
+	var apiErr *apiError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	for _, statusCode := range statusCodes {
+		if apiErr.StatusCode == statusCode {
+			return true
+		}
+	}
+	return false
+}
+
+func dedupeGmailIDs(ids []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
+}
+
+func filterDeletedGmailIDs(ids []string, removedFromInbox map[string]bool, forceRefresh map[string]bool) []string {
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if removedFromInbox[id] && !forceRefresh[id] {
+			continue
+		}
+		out = append(out, id)
+	}
+	return out
+}
+
+func newerGmailHistoryID(current string, candidate string) string {
+	current = strings.TrimSpace(current)
+	candidate = strings.TrimSpace(candidate)
+	if candidate == "" {
+		return current
+	}
+	if current == "" {
+		return candidate
+	}
+	currentValue, currentErr := strconv.ParseUint(current, 10, 64)
+	candidateValue, candidateErr := strconv.ParseUint(candidate, 10, 64)
+	if currentErr == nil && candidateErr == nil {
+		if candidateValue > currentValue {
+			return candidate
+		}
+		return current
+	}
+	if candidate > current {
+		return candidate
+	}
+	return current
 }
 
 type gmailMessage struct {
@@ -294,7 +651,51 @@ type gmailMessage struct {
 	LabelIDs     []string     `json:"labelIds"`
 	Snippet      string       `json:"snippet"`
 	InternalDate string       `json:"internalDate"`
+	HistoryID    string       `json:"historyId"`
 	Payload      gmailPayload `json:"payload"`
+}
+
+type gmailProfile struct {
+	HistoryID string `json:"historyId"`
+}
+
+type gmailListResponse struct {
+	Messages []gmailListMessage `json:"messages"`
+}
+
+type gmailListMessage struct {
+	ID       string `json:"id"`
+	ThreadID string `json:"threadId"`
+}
+
+type gmailHistoryResponse struct {
+	History       []gmailHistoryEntry `json:"history"`
+	NextPageToken string              `json:"nextPageToken"`
+	HistoryID     string              `json:"historyId"`
+}
+
+type gmailHistoryEntry struct {
+	ID              string                    `json:"id"`
+	MessagesAdded   []gmailHistoryMessage     `json:"messagesAdded"`
+	MessagesDeleted []gmailHistoryMessage     `json:"messagesDeleted"`
+	LabelsAdded     []gmailHistoryLabelChange `json:"labelsAdded"`
+	LabelsRemoved   []gmailHistoryLabelChange `json:"labelsRemoved"`
+}
+
+type gmailHistoryMessage struct {
+	Message gmailHistoryMessageRef `json:"message"`
+}
+
+type gmailHistoryLabelChange struct {
+	Message  gmailHistoryMessageRef `json:"message"`
+	LabelIDs []string               `json:"labelIds"`
+}
+
+type gmailHistoryMessageRef struct {
+	ID        string   `json:"id"`
+	ThreadID  string   `json:"threadId"`
+	LabelIDs  []string `json:"labelIds"`
+	HistoryID string   `json:"historyId"`
 }
 
 type gmailPayload struct {

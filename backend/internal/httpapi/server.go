@@ -260,7 +260,9 @@ func (s *Server) accounts(w http.ResponseWriter, r *http.Request) {
 					}
 					account.Status = model.AccountActive
 					account.LastError = ""
-					account.SyncCursor = strconv.FormatInt(time.Now().UnixNano(), 10)
+					if account.Provider != model.ProviderGmail {
+						account.SyncCursor = time.Now().UTC().Format(time.RFC3339Nano)
+					}
 					slog.Info("account sync completed", "account_id", account.ID, "provider", account.Provider, "email", account.Email, "cursor", account.SyncCursor)
 				}
 				s.db.UpdateAccount(account)
@@ -723,7 +725,9 @@ func (s *Server) syncAccount(w http.ResponseWriter, r *http.Request, accountID s
 			}
 			account.Status = model.AccountActive
 			account.LastError = ""
-			account.SyncCursor = strconv.FormatInt(time.Now().UnixNano(), 10)
+			if account.Provider != model.ProviderGmail {
+				account.SyncCursor = time.Now().UTC().Format(time.RFC3339Nano)
+			}
 			slog.Info("account sync completed", "account_id", account.ID, "provider", account.Provider, "email", account.Email, "cursor", account.SyncCursor)
 		}
 		s.db.UpdateAccount(account)

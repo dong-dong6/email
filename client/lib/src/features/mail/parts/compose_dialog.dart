@@ -20,12 +20,17 @@ class _ComposeDialogState extends State<_ComposeDialog> {
   bool _sending = false;
   bool _showCcBcc = false;
   String? _localError;
+  String? _accountId;
 
   @override
   void initState() {
     super.initState();
     final reply = widget.replyTo;
     final forward = widget.forwardFrom;
+    _accountId = reply?.accountId ??
+        forward?.accountId ??
+        widget.state.selectedAccount?.id ??
+        widget.state.accounts.firstOrNull?.id;
     _to = TextEditingController(text: reply == null ? '' : reply.from.email);
     _cc = TextEditingController();
     _bcc = TextEditingController();
@@ -57,7 +62,12 @@ class _ComposeDialogState extends State<_ComposeDialog> {
   Widget build(BuildContext context) {
     final width = MediaQuery.sizeOf(context).width;
     final scheme = Theme.of(context).colorScheme;
-    final account = widget.state.selectedAccount ?? widget.state.accounts.firstOrNull;
+    final accounts = widget.state.accounts;
+    final account = accounts
+            .where((account) => account.id == _accountId)
+            .firstOrNull ??
+        widget.state.selectedAccount ??
+        accounts.firstOrNull;
     return Dialog.fullscreen(
       child: ColoredBox(
         color: scheme.surface,
@@ -102,32 +112,33 @@ class _ComposeDialogState extends State<_ComposeDialog> {
                           ),
                           const SizedBox(width: 12),
                           Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  account?.displayName ?? '未选择发件账号',
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: Theme.of(context)
-                                      .textTheme
-                                      .titleSmall
-                                      ?.copyWith(fontWeight: FontWeight.w800),
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  account?.email ?? '请先添加邮箱账号',
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: Theme.of(context)
-                                      .textTheme
-                                      .bodySmall
-                                      ?.copyWith(
-                                        color: scheme.onSurfaceVariant,
+                            child: accounts.length > 1
+                                ? DropdownButtonHideUnderline(
+                                    child: DropdownButton<String>(
+                                      isExpanded: true,
+                                      value: account?.id,
+                                      icon: const Icon(
+                                        Icons.expand_more_rounded,
                                       ),
-                                ),
-                              ],
-                            ),
+                                      onChanged: _sending
+                                          ? null
+                                          : (value) {
+                                              setState(() {
+                                                _accountId = value;
+                                              });
+                                            },
+                                      items: [
+                                        for (final item in accounts)
+                                          DropdownMenuItem(
+                                            value: item.id,
+                                            child: _ComposeAccountLabel(
+                                              account: item,
+                                            ),
+                                          ),
+                                      ],
+                                    ),
+                                  )
+                                : _ComposeAccountLabel(account: account),
                           ),
                         ],
                       ),
@@ -285,6 +296,7 @@ class _ComposeDialogState extends State<_ComposeDialog> {
       _localError = null;
     });
     await widget.state.sendMessage(
+      accountId: _accountId ?? '',
       to: recipients,
       cc: _parseAddresses(_cc.text),
       bcc: _parseAddresses(_bcc.text),
@@ -310,3 +322,37 @@ class _ComposeDialogState extends State<_ComposeDialog> {
   }
 }
 
+class _ComposeAccountLabel extends StatelessWidget {
+  const _ComposeAccountLabel({required this.account});
+
+  final MailAccount? account;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          account?.displayName ?? '未选择发件账号',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: Theme.of(context)
+              .textTheme
+              .titleSmall
+              ?.copyWith(fontWeight: FontWeight.w800),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          account?.email ?? '请先添加邮箱账号',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: scheme.onSurfaceVariant,
+              ),
+        ),
+      ],
+    );
+  }
+}

@@ -56,7 +56,7 @@ class AppState extends ChangeNotifier {
     if (id == null) {
       return visibleMessages.isEmpty ? null : visibleMessages.first;
     }
-    return messages.where((message) => message.id == id).firstOrNull;
+    return visibleMessages.where((message) => message.id == id).firstOrNull;
   }
 
   List<MailMessage> get visibleMessages {
@@ -123,7 +123,10 @@ class AppState extends ChangeNotifier {
           !folders.any((folder) => folder.id == selectedFolderId)) {
         selectedFolderId = folders.firstOrNull?.id;
       }
-      selectedMessageId ??= visibleMessages.firstOrNull?.id;
+      if (selectedMessageId == null ||
+          !visibleMessages.any((message) => message.id == selectedMessageId)) {
+        selectedMessageId = visibleMessages.firstOrNull?.id;
+      }
     });
   }
 
@@ -325,15 +328,17 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> sendMessage({
+    required String accountId,
     required List<Address> to,
     List<Address> cc = const [],
     List<Address> bcc = const [],
     required String subject,
     required String body,
   }) async {
-    final account = accounts.firstOrNull;
+    final account =
+        accounts.where((account) => account.id == accountId).firstOrNull;
     if (account == null) {
-      error = '请先添加邮箱账户';
+      error = '请选择可用的发件账号';
       notifyListeners();
       return;
     }

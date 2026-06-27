@@ -10,7 +10,10 @@ import (
 	"email/backend/internal/model"
 )
 
-var ErrNotFound = errors.New("not found")
+var (
+	ErrNotFound               = errors.New("not found")
+	ErrInvalidAccountBoundary = errors.New("folder belongs to another account")
+)
 
 type Memory struct {
 	mu       sync.RWMutex
@@ -268,8 +271,12 @@ func (m *Memory) MoveMessage(id, folderID string) (model.Message, error) {
 	if !ok {
 		return model.Message{}, ErrNotFound
 	}
-	if _, ok := m.folders[folderID]; !ok {
+	folder, ok := m.folders[folderID]
+	if !ok {
 		return model.Message{}, ErrNotFound
+	}
+	if folder.AccountID != msg.AccountID {
+		return model.Message{}, ErrInvalidAccountBoundary
 	}
 	msg.FolderID = folderID
 	msg.UpdatedAt = time.Now()

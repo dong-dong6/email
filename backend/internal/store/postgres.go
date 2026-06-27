@@ -367,9 +367,20 @@ func (p *Postgres) MoveMessage(ctx context.Context, id, folderID string) (model.
 	if !ok {
 		return model.Message{}, ErrNotFound
 	}
+	var folderAccountID string
+	err := p.pool.QueryRow(ctx, "SELECT account_id FROM folders WHERE id=$1", folderID).Scan(&folderAccountID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return model.Message{}, ErrNotFound
+	}
+	if err != nil {
+		return model.Message{}, err
+	}
+	if folderAccountID != msg.AccountID {
+		return model.Message{}, ErrInvalidAccountBoundary
+	}
 	msg.FolderID = folderID
 	msg.UpdatedAt = time.Now()
-	_, err := p.pool.Exec(ctx, "UPDATE messages SET folder_id=$2, updated_at=$3 WHERE id=$1",
+	_, err = p.pool.Exec(ctx, "UPDATE messages SET folder_id=$2, updated_at=$3 WHERE id=$1",
 		id, folderID, msg.UpdatedAt)
 	return msg, err
 }

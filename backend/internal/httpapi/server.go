@@ -821,6 +821,10 @@ func (s *Server) moveMessage(w http.ResponseWriter, r *http.Request, id string) 
 	}
 	msg, err := s.db.MoveMessage(id, req.FolderID)
 	if err != nil {
+		if errors.Is(err, store.ErrInvalidAccountBoundary) {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
 		writeError(w, http.StatusNotFound, err)
 		return
 	}

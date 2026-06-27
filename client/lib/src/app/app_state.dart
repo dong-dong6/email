@@ -326,6 +326,8 @@ class AppState extends ChangeNotifier {
 
   Future<void> sendMessage({
     required List<Address> to,
+    List<Address> cc = const [],
+    List<Address> bcc = const [],
     required String subject,
     required String body,
   }) async {
@@ -337,7 +339,13 @@ class AppState extends ChangeNotifier {
     }
     await _run(() async {
       await api.send(
-          accountId: account.id, to: to, subject: subject, bodyText: body);
+        accountId: account.id,
+        to: to,
+        cc: cc,
+        bcc: bcc,
+        subject: subject,
+        bodyText: body,
+      );
       snapshot = await api.snapshot();
     });
   }

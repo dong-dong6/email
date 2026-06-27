@@ -110,6 +110,8 @@ class ApiClient {
   Future<void> send({
     required String accountId,
     required List<Address> to,
+    List<Address> cc = const [],
+    List<Address> bcc = const [],
     required String subject,
     required String bodyText,
   }) async {
@@ -119,6 +121,8 @@ class ApiClient {
     await _json('POST', '/api/v1/send', body: {
       'account_id': accountId,
       'to': to.map((item) => item.toJson()).toList(),
+      if (cc.isNotEmpty) 'cc': cc.map((item) => item.toJson()).toList(),
+      if (bcc.isNotEmpty) 'bcc': bcc.map((item) => item.toJson()).toList(),
       'subject': subject,
       'body_text': bodyText,
     });

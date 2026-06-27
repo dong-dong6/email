@@ -106,6 +106,8 @@ class MailMessage {
     required this.threadId,
     required this.from,
     required this.to,
+    required this.cc,
+    required this.bcc,
     required this.subject,
     required this.snippet,
     required this.bodyText,
@@ -124,6 +126,8 @@ class MailMessage {
   final String threadId;
   final Address from;
   final List<Address> to;
+  final List<Address> cc;
+  final List<Address> bcc;
   final String subject;
   final String snippet;
   final String bodyText;
@@ -143,6 +147,14 @@ class MailMessage {
       threadId: json['thread_id'] as String? ?? '',
       from: Address.fromJson((json['from'] as Map).cast<String, dynamic>()),
       to: ((json['to'] as List?) ?? const [])
+          .map(
+              (item) => Address.fromJson((item as Map).cast<String, dynamic>()))
+          .toList(),
+      cc: ((json['cc'] as List?) ?? const [])
+          .map(
+              (item) => Address.fromJson((item as Map).cast<String, dynamic>()))
+          .toList(),
+      bcc: ((json['bcc'] as List?) ?? const [])
           .map(
               (item) => Address.fromJson((item as Map).cast<String, dynamic>()))
           .toList(),
@@ -170,6 +182,8 @@ class MailMessage {
       threadId: threadId,
       from: from,
       to: to,
+      cc: cc,
+      bcc: bcc,
       subject: subject,
       snippet: snippet,
       bodyText: bodyText,

@@ -689,7 +689,10 @@ func (s *Server) accountByID(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodDelete:
-		s.db.DeleteAccount(accountID)
+		if err := s.db.DeleteAccount(accountID); err != nil {
+			writeError(w, http.StatusNotFound, err)
+			return
+		}
 		s.broker.Publish(model.Event{Type: "account.deleted", AccountID: accountID})
 		w.WriteHeader(http.StatusNoContent)
 	case http.MethodGet:

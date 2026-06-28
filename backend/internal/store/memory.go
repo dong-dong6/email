@@ -137,9 +137,12 @@ func (m *Memory) UpdateAccount(account model.Account) {
 	m.accounts[account.ID] = account
 }
 
-func (m *Memory) DeleteAccount(id string) {
+func (m *Memory) DeleteAccount(id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if _, ok := m.accounts[id]; !ok {
+		return ErrNotFound
+	}
 	delete(m.accounts, id)
 	for folderID, folder := range m.folders {
 		if folder.AccountID == id {
@@ -151,7 +154,18 @@ func (m *Memory) DeleteAccount(id string) {
 			delete(m.messages, msgID)
 		}
 	}
+	for draftID, draft := range m.drafts {
+		if draft.AccountID == id {
+			delete(m.drafts, draftID)
+		}
+	}
+	for outboxID, item := range m.outbox {
+		if item.AccountID == id {
+			delete(m.outbox, outboxID)
+		}
+	}
 	m.recountLocked()
+	return nil
 }
 
 func (m *Memory) ListFolders(accountID string) []model.Folder {

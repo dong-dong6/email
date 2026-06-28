@@ -190,8 +190,14 @@ func (p *Postgres) decryptAccount(account model.Account) model.Account {
 }
 
 func (p *Postgres) DeleteAccount(ctx context.Context, id string) error {
-	_, err := p.pool.Exec(ctx, "DELETE FROM accounts WHERE id = $1", id)
-	return err
+	tag, err := p.pool.Exec(ctx, "DELETE FROM accounts WHERE id = $1", id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func (p *Postgres) ListFolders(ctx context.Context, accountID string) ([]model.Folder, error) {

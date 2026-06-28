@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"errors"
 	"sort"
 	"strings"
@@ -14,6 +15,8 @@ var (
 	ErrNotFound               = errors.New("not found")
 	ErrInvalidAccountBoundary = errors.New("folder belongs to another account")
 )
+
+var _ MailStore = (*Memory)(nil)
 
 type Memory struct {
 	mu       sync.RWMutex
@@ -58,7 +61,7 @@ func NewMemoryWithKey(key []byte) (*Memory, error) {
 	return m, nil
 }
 
-func (m *Memory) Snapshot() model.MailboxSnapshot {
+func (m *Memory) Snapshot(ctx context.Context) (model.MailboxSnapshot, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return model.MailboxSnapshot{
@@ -68,17 +71,17 @@ func (m *Memory) Snapshot() model.MailboxSnapshot {
 		Drafts:   mapValues(m.drafts),
 		Rules:    mapValues(m.rules),
 		Settings: m.settings,
-	}
+	}, nil
 }
 
-func (m *Memory) ListAccounts() []model.Account {
+func (m *Memory) ListAccounts(ctx context.Context) ([]model.Account, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	out := make([]model.Account, 0, len(m.accounts))
 	for _, a := range m.accounts {
 		out = append(out, m.decryptAccount(a))
 	}
-	return out
+	return out, nil
 }
 
 func (m *Memory) decryptAccount(a model.Account) model.Account {
@@ -86,7 +89,7 @@ func (m *Memory) decryptAccount(a model.Account) model.Account {
 	return a
 }
 
-func (m *Memory) CreateAccount(account model.Account) model.Account {
+func (m *Memory) CreateAccount(ctx context.Context, account model.Account) (model.Account, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	now := time.Now()
@@ -110,20 +113,20 @@ func (m *Memory) CreateAccount(account model.Account) model.Account {
 	for _, folder := range defaultFolders(account.ID) {
 		m.folders[folder.ID] = folder
 	}
-	return m.decryptAccount(account)
+	return m.decryptAccount(account), nil
 }
 
-func (m *Memory) GetAccount(id string) (model.Account, bool) {
+func (m *Memory) GetAccount(ctx context.Context, id string) (model.Account, bool, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	account, ok := m.accounts[id]
 	if !ok {
-		return model.Account{}, false
+		return model.Account{}, false, nil
 	}
-	return m.decryptAccount(account), true
+	return m.decryptAccount(account), true, nil
 }
 
-func (m *Memory) UpdateAccount(account model.Account) {
+func (m *Memory) UpdateAccount(ctx context.Context, account model.Account) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if account.Password == "" {
@@ -135,9 +138,10 @@ func (m *Memory) UpdateAccount(account model.Account) {
 	}
 	account.UpdatedAt = time.Now()
 	m.accounts[account.ID] = account
+	return nil
 }
 
-func (m *Memory) DeleteAccount(id string) error {
+func (m *Memory) DeleteAccount(ctx context.Context, id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.accounts[id]; !ok {
@@ -168,7 +172,7 @@ func (m *Memory) DeleteAccount(id string) error {
 	return nil
 }
 
-func (m *Memory) ListFolders(accountID string) []model.Folder {
+func (m *Memory) ListFolders(ctx context.Context, accountID string) ([]model.Folder, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	out := make([]model.Folder, 0)
@@ -178,21 +182,22 @@ func (m *Memory) ListFolders(accountID string) []model.Folder {
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return folderRank(out[i].Role) < folderRank(out[j].Role) })
-	return out
+	return out, nil
 }
 
-func (m *Memory) GetFolder(id string) (model.Folder, bool) {
+func (m *Memory) GetFolder(ctx context.Context, id string) (model.Folder, bool, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	folder, ok := m.folders[id]
-	return folder, ok
+	return folder, ok, nil
 }
 
-func (m *Memory) UpsertFolder(folder model.Folder) {
+func (m *Memory) UpsertFolder(ctx context.Context, folder model.Folder) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.folders[folder.ID] = folder
 	m.recountLocked()
+	return nil
 }
 
 type MessageFilter struct {
@@ -202,7 +207,7 @@ type MessageFilter struct {
 	Limit     int
 }
 
-func (m *Memory) ListMessages(filter MessageFilter) []model.Message {
+func (m *Memory) ListMessages(ctx context.Context, filter MessageFilter) ([]model.Message, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	var out []model.Message
@@ -221,30 +226,30 @@ func (m *Memory) ListMessages(filter MessageFilter) []model.Message {
 	}
 	out = sortedMessages(out)
 	if filter.Limit > 0 && len(out) > filter.Limit {
-		return out[:filter.Limit]
+		return out[:filter.Limit], nil
 	}
-	return out
+	return out, nil
 }
 
-func (m *Memory) GetMessage(id string) (model.Message, bool) {
+func (m *Memory) GetMessage(ctx context.Context, id string) (model.Message, bool, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	msg, ok := m.messages[id]
-	return msg, ok
+	return msg, ok, nil
 }
 
-func (m *Memory) FindMessageByProvider(accountID, providerID string) (model.Message, bool) {
+func (m *Memory) FindMessageByProvider(ctx context.Context, accountID, providerID string) (model.Message, bool, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	for _, msg := range m.messages {
 		if msg.AccountID == accountID && msg.ProviderID == providerID {
-			return msg, true
+			return msg, true, nil
 		}
 	}
-	return model.Message{}, false
+	return model.Message{}, false, nil
 }
 
-func (m *Memory) UpsertMessage(msg model.Message) model.Message {
+func (m *Memory) UpsertMessage(ctx context.Context, msg model.Message) (model.Message, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	now := time.Now()
@@ -256,10 +261,10 @@ func (m *Memory) UpsertMessage(msg model.Message) model.Message {
 	msg.HasAttachments = len(msg.Attachments) > 0
 	m.messages[msg.ID] = msg
 	m.recountLocked()
-	return msg
+	return msg, nil
 }
 
-func (m *Memory) PatchMessage(id string, read *bool, starred *bool) (model.Message, error) {
+func (m *Memory) PatchMessage(ctx context.Context, id string, read *bool, starred *bool) (model.Message, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	msg, ok := m.messages[id]
@@ -278,7 +283,7 @@ func (m *Memory) PatchMessage(id string, read *bool, starred *bool) (model.Messa
 	return msg, nil
 }
 
-func (m *Memory) MoveMessage(id, folderID string) (model.Message, error) {
+func (m *Memory) MoveMessage(ctx context.Context, id, folderID string) (model.Message, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	msg, ok := m.messages[id]
@@ -299,7 +304,7 @@ func (m *Memory) MoveMessage(id, folderID string) (model.Message, error) {
 	return msg, nil
 }
 
-func (m *Memory) DeleteMessage(id string) error {
+func (m *Memory) DeleteMessage(ctx context.Context, id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.messages[id]; !ok {
@@ -310,13 +315,13 @@ func (m *Memory) DeleteMessage(id string) error {
 	return nil
 }
 
-func (m *Memory) ListDrafts() []model.Draft {
+func (m *Memory) ListDrafts(ctx context.Context) ([]model.Draft, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return mapValues(m.drafts)
+	return mapValues(m.drafts), nil
 }
 
-func (m *Memory) SaveDraft(draft model.Draft) model.Draft {
+func (m *Memory) SaveDraft(ctx context.Context, draft model.Draft) (model.Draft, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if draft.ID == "" {
@@ -324,25 +329,26 @@ func (m *Memory) SaveDraft(draft model.Draft) model.Draft {
 	}
 	draft.UpdatedAt = time.Now()
 	m.drafts[draft.ID] = draft
-	return draft
+	return draft, nil
 }
 
-func (m *Memory) DeleteDraft(id string) {
+func (m *Memory) DeleteDraft(ctx context.Context, id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.drafts, id)
+	return nil
 }
 
-func (m *Memory) EnqueueOutbox(req model.SendRequest) model.OutboxItem {
+func (m *Memory) EnqueueOutbox(ctx context.Context, req model.SendRequest) (model.OutboxItem, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	now := time.Now()
 	item := model.OutboxItem{ID: NewID("out"), AccountID: req.AccountID, Payload: req, Status: "queued", CreatedAt: now, UpdatedAt: now}
 	m.outbox[item.ID] = item
-	return item
+	return item, nil
 }
 
-func (m *Memory) PendingOutbox(limit int) []model.OutboxItem {
+func (m *Memory) PendingOutbox(ctx context.Context, limit int) ([]model.OutboxItem, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	var out []model.OutboxItem
@@ -353,58 +359,59 @@ func (m *Memory) PendingOutbox(limit int) []model.OutboxItem {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
 	if limit > 0 && len(out) > limit {
-		return out[:limit]
+		return out[:limit], nil
 	}
-	return out
+	return out, nil
 }
 
-func (m *Memory) MarkOutbox(id, status, lastError string) (model.OutboxItem, bool) {
+func (m *Memory) MarkOutbox(ctx context.Context, id, status, lastError string) (model.OutboxItem, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	item, ok := m.outbox[id]
 	if !ok {
-		return model.OutboxItem{}, false
+		return model.OutboxItem{}, ErrNotFound
 	}
 	item.Status = status
 	item.LastError = lastError
 	item.Attempts++
 	item.UpdatedAt = time.Now()
 	m.outbox[id] = item
-	return item, true
+	return item, nil
 }
 
-func (m *Memory) ListRules() []model.Rule {
+func (m *Memory) ListRules(ctx context.Context) ([]model.Rule, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return mapValues(m.rules)
+	return mapValues(m.rules), nil
 }
 
-func (m *Memory) CreateRule(rule model.Rule) model.Rule {
+func (m *Memory) CreateRule(ctx context.Context, rule model.Rule) (model.Rule, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	rule.ID = NewID("rule")
 	rule.CreatedAt = time.Now()
 	m.rules[rule.ID] = rule
-	return rule
+	return rule, nil
 }
 
-func (m *Memory) DeleteRule(id string) {
+func (m *Memory) DeleteRule(ctx context.Context, id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.rules, id)
+	return nil
 }
 
-func (m *Memory) Settings() model.Settings {
+func (m *Memory) Settings(ctx context.Context) (model.Settings, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.settings
+	return m.settings, nil
 }
 
-func (m *Memory) UpdateSettings(settings model.Settings) model.Settings {
+func (m *Memory) UpdateSettings(ctx context.Context, settings model.Settings) (model.Settings, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.settings = settings
-	return m.settings
+	return m.settings, nil
 }
 
 func (m *Memory) recountLocked() {

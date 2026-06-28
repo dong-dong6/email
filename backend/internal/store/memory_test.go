@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -8,18 +9,25 @@ import (
 )
 
 func TestMoveMessageRejectsFolderFromAnotherAccount(t *testing.T) {
+	ctx := context.Background()
 	db := NewMemory()
-	accountA := db.CreateAccount(model.Account{
+	accountA, err := db.CreateAccount(ctx, model.Account{
 		Provider: model.ProviderMock,
 		Email:    "a@example.com",
 	})
-	accountB := db.CreateAccount(model.Account{
+	if err != nil {
+		t.Fatal(err)
+	}
+	accountB, err := db.CreateAccount(ctx, model.Account{
 		Provider: model.ProviderMock,
 		Email:    "b@example.com",
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	inboxA := mustFolderByRole(t, db, accountA.ID, "inbox")
 	inboxB := mustFolderByRole(t, db, accountB.ID, "inbox")
-	msg := db.UpsertMessage(model.Message{
+	msg, err := db.UpsertMessage(ctx, model.Message{
 		AccountID:  accountA.ID,
 		FolderID:   inboxA.ID,
 		ThreadID:   "thread-a",
@@ -30,12 +38,18 @@ func TestMoveMessageRejectsFolderFromAnotherAccount(t *testing.T) {
 		Snippet:    "Hello",
 		Labels:     []string{"inbox"},
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	if _, err := db.MoveMessage(msg.ID, inboxB.ID); !errors.Is(err, ErrInvalidAccountBoundary) {
+	if _, err := db.MoveMessage(ctx, msg.ID, inboxB.ID); !errors.Is(err, ErrInvalidAccountBoundary) {
 		t.Fatalf("expected ErrInvalidAccountBoundary, got %v", err)
 	}
 
-	got, ok := db.GetMessage(msg.ID)
+	got, ok, err := db.GetMessage(ctx, msg.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !ok {
 		t.Fatal("message disappeared")
 	}
@@ -45,13 +59,17 @@ func TestMoveMessageRejectsFolderFromAnotherAccount(t *testing.T) {
 }
 
 func TestDeleteAccountRemovesOwnedDataAndRejectsMissing(t *testing.T) {
+	ctx := context.Background()
 	db := NewMemory()
-	account := db.CreateAccount(model.Account{
+	account, err := db.CreateAccount(ctx, model.Account{
 		Provider: model.ProviderMock,
 		Email:    "owner@example.com",
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	inbox := mustFolderByRole(t, db, account.ID, "inbox")
-	msg := db.UpsertMessage(model.Message{
+	msg, err := db.UpsertMessage(ctx, model.Message{
 		AccountID:  account.ID,
 		FolderID:   inbox.ID,
 		ThreadID:   "thread-a",
@@ -62,36 +80,55 @@ func TestDeleteAccountRemovesOwnedDataAndRejectsMissing(t *testing.T) {
 		Snippet:    "Hello",
 		Labels:     []string{"inbox"},
 	})
-	db.SaveDraft(model.Draft{AccountID: account.ID})
-	db.EnqueueOutbox(model.SendRequest{
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SaveDraft(ctx, model.Draft{AccountID: account.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.EnqueueOutbox(ctx, model.SendRequest{
 		AccountID: account.ID,
 		To:        []model.Address{{Email: "reader@example.com"}},
 		Subject:   "Queued",
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
-	if err := db.DeleteAccount(account.ID); err != nil {
+	if err := db.DeleteAccount(ctx, account.ID); err != nil {
 		t.Fatalf("delete account failed: %v", err)
 	}
-	if _, ok := db.GetAccount(account.ID); ok {
+	if _, ok, err := db.GetAccount(ctx, account.ID); err != nil {
+		t.Fatal(err)
+	} else if ok {
 		t.Fatal("account still exists")
 	}
-	if _, ok := db.GetMessage(msg.ID); ok {
+	if _, ok, err := db.GetMessage(ctx, msg.ID); err != nil {
+		t.Fatal(err)
+	} else if ok {
 		t.Fatal("message still exists")
 	}
-	if drafts := db.ListDrafts(); len(drafts) != 0 {
+	if drafts, err := db.ListDrafts(ctx); err != nil {
+		t.Fatal(err)
+	} else if len(drafts) != 0 {
 		t.Fatalf("drafts were not removed: %#v", drafts)
 	}
-	if pending := db.PendingOutbox(10); len(pending) != 0 {
+	if pending, err := db.PendingOutbox(ctx, 10); err != nil {
+		t.Fatal(err)
+	} else if len(pending) != 0 {
 		t.Fatalf("outbox items were not removed: %#v", pending)
 	}
-	if err := db.DeleteAccount(account.ID); !errors.Is(err, ErrNotFound) {
+	if err := db.DeleteAccount(ctx, account.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound for missing account, got %v", err)
 	}
 }
 
 func mustFolderByRole(t *testing.T, db *Memory, accountID string, role string) model.Folder {
 	t.Helper()
-	for _, folder := range db.ListFolders(accountID) {
+	folders, err := db.ListFolders(context.Background(), accountID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, folder := range folders {
 		if folder.Role == role {
 			return folder
 		}

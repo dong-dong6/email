@@ -8,5 +8,6 @@ RUN go test ./... && go build -trimpath -ldflags="-s -w" -o /out/email-api ./cmd
 FROM alpine:3.20
 WORKDIR /app
 COPY --from=build /out/email-api /app/email-api
+COPY migrations /app/migrations
 EXPOSE 8080
 ENTRYPOINT ["/app/email-api"]

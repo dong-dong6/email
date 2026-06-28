@@ -30,7 +30,7 @@ import (
 type Server struct {
 	cfg      config.Config
 	auth     *auth.Service
-	db       *store.Memory
+	db       store.MailStore
 	blobs    *blob.Store
 	registry *mail.Registry
 	broker   *events.Broker
@@ -39,7 +39,7 @@ type Server struct {
 	oauthSessions map[string]oauthSession
 }
 
-func NewServer(cfg config.Config, authSvc *auth.Service, db *store.Memory, blobs *blob.Store, registry *mail.Registry, broker *events.Broker) *Server {
+func NewServer(cfg config.Config, authSvc *auth.Service, db store.MailStore, blobs *blob.Store, registry *mail.Registry, broker *events.Broker) *Server {
 	return &Server{cfg: cfg, auth: authSvc, db: db, blobs: blobs, registry: registry, broker: broker, oauthSessions: map[string]oauthSession{}}
 }
 
@@ -185,7 +185,11 @@ func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
-	snapshot := s.db.Snapshot()
+	snapshot, err := s.db.Snapshot(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
 	snapshot.Settings = publicSettings(snapshot.Settings)
 	writeJSON(w, http.StatusOK, snapshot)
 }
@@ -193,7 +197,12 @@ func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
 func (s *Server) accounts(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, http.StatusOK, s.db.ListAccounts())
+		accounts, err := s.db.ListAccounts(r.Context())
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, accounts)
 	case http.MethodPost:
 		var req struct {
 			Provider    model.Provider `json:"provider"`
@@ -239,7 +248,11 @@ func (s *Server) accounts(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		account = s.db.CreateAccount(account)
+		account, err = s.db.CreateAccount(r.Context(), account)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
 		s.broker.Publish(model.Event{Type: "account.created", AccountID: account.ID, Payload: account})
 		if account.Provider != model.ProviderMock {
 			connector, ok := s.registry.For(account.Provider)
@@ -248,15 +261,19 @@ func (s *Server) accounts(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			account.Status = model.AccountSyncing
-			s.db.UpdateAccount(account)
+			if err := s.db.UpdateAccount(r.Context(), account); err != nil {
+				writeError(w, http.StatusInternalServerError, err)
+				return
+			}
 			go func() {
+				ctx := context.Background()
 				slog.Info("account sync started", "account_id", account.ID, "provider", account.Provider, "email", account.Email, "trigger", "account_created")
-				if err := connector.Sync(context.Background(), account); err != nil {
+				if err := connector.Sync(ctx, account); err != nil {
 					account.Status = model.AccountError
 					account.LastError = err.Error()
 					slog.Error("account sync failed", "account_id", account.ID, "provider", account.Provider, "email", account.Email, "error", err)
 				} else {
-					if refreshed, ok := s.db.GetAccount(account.ID); ok {
+					if refreshed, ok, err := s.db.GetAccount(ctx, account.ID); err == nil && ok {
 						account = refreshed
 					}
 					account.Status = model.AccountActive
@@ -266,7 +283,7 @@ func (s *Server) accounts(w http.ResponseWriter, r *http.Request) {
 					}
 					slog.Info("account sync completed", "account_id", account.ID, "provider", account.Provider, "email", account.Email, "cursor", account.SyncCursor)
 				}
-				s.db.UpdateAccount(account)
+				_ = s.db.UpdateAccount(ctx, account)
 				s.broker.Publish(model.Event{Type: "account.synced", AccountID: account.ID, Payload: account})
 			}()
 		}
@@ -283,7 +300,11 @@ func (s *Server) oauthStart(w http.ResponseWriter, r *http.Request) {
 	}
 	provider := model.Provider(strings.ToLower(strings.TrimSpace(r.URL.Query().Get("provider"))))
 	state := randomState()
-	settings := s.db.Settings()
+	settings, err := s.db.Settings(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
 	baseURL := requestBaseURL(r)
 	switch provider {
 	case model.ProviderGmail:
@@ -483,7 +504,10 @@ type oauthToken struct {
 }
 
 func (s *Server) completeOAuth(ctx context.Context, provider model.Provider, code string, redirectURI string) (model.Account, error) {
-	settings := s.db.Settings()
+	settings, err := s.db.Settings(ctx)
+	if err != nil {
+		return model.Account{}, err
+	}
 	var clientID, clientSecret, tokenURL string
 	switch provider {
 	case model.ProviderGmail:
@@ -512,7 +536,7 @@ func (s *Server) completeOAuth(ctx context.Context, provider model.Provider, cod
 	if err != nil {
 		return model.Account{}, err
 	}
-	account := s.db.CreateAccount(model.Account{
+	account, err := s.db.CreateAccount(ctx, model.Account{
 		Provider:    provider,
 		Email:       email,
 		DisplayName: firstNonEmpty(displayName, email),
@@ -520,7 +544,7 @@ func (s *Server) completeOAuth(ctx context.Context, provider model.Provider, cod
 		Password:    string(tokenJSON),
 		Status:      model.AccountActive,
 	})
-	return account, nil
+	return account, err
 }
 
 func exchangeOAuthToken(ctx context.Context, tokenURL string, clientID string, clientSecret string, code string, redirectURI string) (oauthToken, error) {
@@ -689,14 +713,18 @@ func (s *Server) accountByID(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodDelete:
-		if err := s.db.DeleteAccount(accountID); err != nil {
+		if err := s.db.DeleteAccount(r.Context(), accountID); err != nil {
 			writeError(w, http.StatusNotFound, err)
 			return
 		}
 		s.broker.Publish(model.Event{Type: "account.deleted", AccountID: accountID})
 		w.WriteHeader(http.StatusNoContent)
 	case http.MethodGet:
-		account, ok := s.db.GetAccount(accountID)
+		account, ok, err := s.db.GetAccount(r.Context(), accountID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
 		if !ok {
 			writeError(w, http.StatusNotFound, store.ErrNotFound)
 			return
@@ -712,7 +740,11 @@ func (s *Server) syncAccount(w http.ResponseWriter, r *http.Request, accountID s
 		methodNotAllowed(w)
 		return
 	}
-	account, ok := s.db.GetAccount(accountID)
+	account, ok, err := s.db.GetAccount(r.Context(), accountID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
 	if !ok {
 		writeError(w, http.StatusNotFound, store.ErrNotFound)
 		return
@@ -727,15 +759,19 @@ func (s *Server) syncAccount(w http.ResponseWriter, r *http.Request, accountID s
 		return
 	}
 	account.Status = model.AccountSyncing
-	s.db.UpdateAccount(account)
+	if err := s.db.UpdateAccount(r.Context(), account); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
 	go func() {
+		ctx := context.Background()
 		slog.Info("account sync started", "account_id", account.ID, "provider", account.Provider, "email", account.Email, "trigger", "manual")
-		if err := connector.Sync(context.Background(), account); err != nil {
+		if err := connector.Sync(ctx, account); err != nil {
 			account.Status = model.AccountError
 			account.LastError = err.Error()
 			slog.Error("account sync failed", "account_id", account.ID, "provider", account.Provider, "email", account.Email, "error", err)
 		} else {
-			if refreshed, ok := s.db.GetAccount(account.ID); ok {
+			if refreshed, ok, err := s.db.GetAccount(ctx, account.ID); err == nil && ok {
 				account = refreshed
 			}
 			account.Status = model.AccountActive
@@ -745,7 +781,7 @@ func (s *Server) syncAccount(w http.ResponseWriter, r *http.Request, accountID s
 			}
 			slog.Info("account sync completed", "account_id", account.ID, "provider", account.Provider, "email", account.Email, "cursor", account.SyncCursor)
 		}
-		s.db.UpdateAccount(account)
+		_ = s.db.UpdateAccount(ctx, account)
 		s.broker.Publish(model.Event{Type: "account.synced", AccountID: account.ID, Payload: account})
 	}()
 	writeJSON(w, http.StatusAccepted, account)
@@ -756,7 +792,12 @@ func (s *Server) folders(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
-	writeJSON(w, http.StatusOK, s.db.ListFolders(r.URL.Query().Get("account_id")))
+	folders, err := s.db.ListFolders(r.Context(), r.URL.Query().Get("account_id"))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, folders)
 }
 
 func (s *Server) messages(w http.ResponseWriter, r *http.Request) {
@@ -771,7 +812,12 @@ func (s *Server) messages(w http.ResponseWriter, r *http.Request) {
 		Query:     r.URL.Query().Get("q"),
 		Limit:     limit,
 	}
-	writeJSON(w, http.StatusOK, s.db.ListMessages(filter))
+	messages, err := s.db.ListMessages(r.Context(), filter)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, messages)
 }
 
 func (s *Server) messageByID(w http.ResponseWriter, r *http.Request) {
@@ -788,7 +834,11 @@ func (s *Server) messageByID(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		msg, ok := s.db.GetMessage(id)
+		msg, ok, err := s.db.GetMessage(r.Context(), id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
 		if !ok {
 			writeError(w, http.StatusNotFound, store.ErrNotFound)
 			return
@@ -803,7 +853,7 @@ func (s *Server) messageByID(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		msg, err := s.db.PatchMessage(id, req.IsRead, req.IsStarred)
+		msg, err := s.db.PatchMessage(r.Context(), id, req.IsRead, req.IsStarred)
 		if err != nil {
 			writeError(w, http.StatusNotFound, err)
 			return
@@ -811,7 +861,7 @@ func (s *Server) messageByID(w http.ResponseWriter, r *http.Request) {
 		s.broker.Publish(model.Event{Type: "message.updated", AccountID: msg.AccountID, MessageID: msg.ID, Payload: msg})
 		writeJSON(w, http.StatusOK, msg)
 	case http.MethodDelete:
-		if err := s.db.DeleteMessage(id); err != nil {
+		if err := s.db.DeleteMessage(r.Context(), id); err != nil {
 			writeError(w, http.StatusNotFound, err)
 			return
 		}
@@ -834,7 +884,7 @@ func (s *Server) moveMessage(w http.ResponseWriter, r *http.Request, id string) 
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	msg, err := s.db.MoveMessage(id, req.FolderID)
+	msg, err := s.db.MoveMessage(r.Context(), id, req.FolderID)
 	if err != nil {
 		if errors.Is(err, store.ErrInvalidAccountBoundary) {
 			writeError(w, http.StatusBadRequest, err)
@@ -853,7 +903,12 @@ func (s *Server) attachmentByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := strings.TrimPrefix(r.URL.Path, "/api/v1/attachments/")
-	for _, msg := range s.db.ListMessages(store.MessageFilter{}) {
+	messages, err := s.db.ListMessages(r.Context(), store.MessageFilter{})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	for _, msg := range messages {
 		for _, attachment := range msg.Attachments {
 			if attachment.ID != id {
 				continue
@@ -875,14 +930,23 @@ func (s *Server) attachmentByID(w http.ResponseWriter, r *http.Request) {
 func (s *Server) drafts(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, http.StatusOK, s.db.ListDrafts())
+		drafts, err := s.db.ListDrafts(r.Context())
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, drafts)
 	case http.MethodPost:
 		var req model.Draft
 		if err := readJSON(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		draft := s.db.SaveDraft(req)
+		draft, err := s.db.SaveDraft(r.Context(), req)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
 		s.broker.Publish(model.Event{Type: "draft.saved", AccountID: draft.AccountID, Payload: draft})
 		writeJSON(w, http.StatusCreated, draft)
 	default:
@@ -900,10 +964,17 @@ func (s *Server) draftByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		req.ID = id
-		draft := s.db.SaveDraft(req)
+		draft, err := s.db.SaveDraft(r.Context(), req)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
 		writeJSON(w, http.StatusOK, draft)
 	case http.MethodDelete:
-		s.db.DeleteDraft(id)
+		if err := s.db.DeleteDraft(r.Context(), id); err != nil {
+			writeError(w, http.StatusNotFound, err)
+			return
+		}
 		w.WriteHeader(http.StatusNoContent)
 	default:
 		methodNotAllowed(w)
@@ -925,7 +996,11 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("account_id is required"))
 		return
 	}
-	account, ok := s.db.GetAccount(req.AccountID)
+	account, ok, err := s.db.GetAccount(r.Context(), req.AccountID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
 	if !ok {
 		writeError(w, http.StatusNotFound, store.ErrNotFound)
 		return
@@ -938,7 +1013,11 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	item := s.db.EnqueueOutbox(req)
+	item, err := s.db.EnqueueOutbox(r.Context(), req)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
 	s.broker.Publish(model.Event{Type: "outbox.queued", AccountID: req.AccountID, Payload: item})
 	writeJSON(w, http.StatusAccepted, item)
 }
@@ -992,13 +1071,23 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 		FolderID:  r.URL.Query().Get("folder_id"),
 		Query:     r.URL.Query().Get("q"),
 	}
-	writeJSON(w, http.StatusOK, s.db.ListMessages(filter))
+	messages, err := s.db.ListMessages(r.Context(), filter)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, messages)
 }
 
 func (s *Server) rules(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, http.StatusOK, s.db.ListRules())
+		rules, err := s.db.ListRules(r.Context())
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, rules)
 	case http.MethodPost:
 		var req model.Rule
 		if err := readJSON(r, &req); err != nil {
@@ -1010,7 +1099,12 @@ func (s *Server) rules(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		req.Enabled = true
-		writeJSON(w, http.StatusCreated, s.db.CreateRule(req))
+		rule, err := s.db.CreateRule(r.Context(), req)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, rule)
 	default:
 		methodNotAllowed(w)
 	}
@@ -1022,28 +1116,45 @@ func (s *Server) ruleByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := strings.TrimPrefix(r.URL.Path, "/api/v1/rules/")
-	s.db.DeleteRule(id)
+	if err := s.db.DeleteRule(r.Context(), id); err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, http.StatusOK, publicSettings(s.db.Settings()))
+		settings, err := s.db.Settings(r.Context())
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, publicSettings(settings))
 	case http.MethodPut:
 		var req model.Settings
 		if err := readJSON(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		current := s.db.Settings()
+		current, err := s.db.Settings(r.Context())
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
 		if strings.TrimSpace(req.GmailClientSecret) == "" {
 			req.GmailClientSecret = current.GmailClientSecret
 		}
 		if strings.TrimSpace(req.MicrosoftClientSecret) == "" {
 			req.MicrosoftClientSecret = current.MicrosoftClientSecret
 		}
-		writeJSON(w, http.StatusOK, publicSettings(s.db.UpdateSettings(req)))
+		updated, err := s.db.UpdateSettings(r.Context(), req)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, publicSettings(updated))
 	default:
 		methodNotAllowed(w)
 	}

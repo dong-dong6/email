@@ -33,7 +33,7 @@ var literalPattern = regexp.MustCompile(`\{([0-9]+)\}\r?\n$`)
 
 type IMAPSMTPConnector struct {
 	provider model.Provider
-	db       *store.Memory
+	db       store.MailStore
 	broker   *events.Broker
 }
 
@@ -93,7 +93,7 @@ func (c IMAPSMTPConnector) syncFolder(ctx context.Context, client *imapClient, a
 	if err := client.selectMailbox(mailbox); err != nil {
 		return err
 	}
-	folder, err := folderByRole(c.db, account.ID, role)
+	folder, err := folderByRole(ctx, c.db, account.ID, role)
 	if err != nil {
 		return err
 	}
@@ -126,7 +126,11 @@ func (c IMAPSMTPConnector) syncFolder(ctx context.Context, client *imapClient, a
 	failed := 0
 	for _, uid := range uids {
 		providerID := "imap:" + uid
-		if existing, ok := c.db.FindMessageByProvider(account.ID, providerID); ok {
+		existing, ok, err := c.db.FindMessageByProvider(ctx, account.ID, providerID)
+		if err != nil {
+			return err
+		}
+		if ok {
 			if since.IsZero() || (existing.ReceivedAt != nil && existing.ReceivedAt.Before(since)) {
 				continue
 			}
@@ -151,11 +155,18 @@ func (c IMAPSMTPConnector) syncFolder(ctx context.Context, client *imapClient, a
 		msg.IsRead = containsIMAPFlag(flags, "\\Seen")
 		msg.IsStarred = containsIMAPFlag(flags, "\\Flagged")
 		msg.Labels = []string{role}
-		if existing, ok := c.db.FindMessageByProvider(account.ID, msg.ProviderID); ok {
+		existing, ok, err = c.db.FindMessageByProvider(ctx, account.ID, msg.ProviderID)
+		if err != nil {
+			return err
+		}
+		if ok {
 			msg.ID = existing.ID
 			msg.CreatedAt = existing.CreatedAt
 		}
-		msg = c.db.UpsertMessage(msg)
+		msg, err = c.db.UpsertMessage(ctx, msg)
+		if err != nil {
+			return err
+		}
 		c.broker.Publish(model.Event{Type: "message.synced", AccountID: account.ID, MessageID: msg.ID, Payload: msg})
 		synced++
 	}
@@ -179,7 +190,7 @@ func (c IMAPSMTPConnector) Send(ctx context.Context, account model.Account, req 
 	if err := sendSMTP(ctx, account, recipients, data); err != nil {
 		return "", err
 	}
-	sentFolder, err := folderByRole(c.db, account.ID, "sent")
+	sentFolder, err := folderByRole(ctx, c.db, account.ID, "sent")
 	if err != nil {
 		return "", err
 	}
@@ -207,7 +218,10 @@ func (c IMAPSMTPConnector) Send(ctx context.Context, account model.Account, req 
 		CreatedAt:  now,
 		UpdatedAt:  now,
 	}
-	msg = c.db.UpsertMessage(msg)
+	msg, err = c.db.UpsertMessage(ctx, msg)
+	if err != nil {
+		return "", err
+	}
 	c.broker.Publish(model.Event{Type: "message.sent", AccountID: account.ID, MessageID: msg.ID, Payload: msg})
 	return providerID, nil
 }
@@ -561,8 +575,12 @@ func looksLikeHTML(value string) bool {
 	return strings.Contains(lower, "<html") || strings.Contains(lower, "<body") || strings.Contains(lower, "<p>")
 }
 
-func folderByRole(db *store.Memory, accountID, role string) (model.Folder, error) {
-	for _, folder := range db.ListFolders(accountID) {
+func folderByRole(ctx context.Context, db store.MailStore, accountID, role string) (model.Folder, error) {
+	folders, err := db.ListFolders(ctx, accountID)
+	if err != nil {
+		return model.Folder{}, err
+	}
+	for _, folder := range folders {
 		if folder.Role == role {
 			return folder, nil
 		}

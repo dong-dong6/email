@@ -23,7 +23,7 @@ type Registry struct {
 	connectors map[model.Provider]Connector
 }
 
-func NewRegistry(db *store.Memory, broker *events.Broker) *Registry {
+func NewRegistry(db store.MailStore, broker *events.Broker) *Registry {
 	return &Registry{connectors: map[model.Provider]Connector{
 		model.ProviderMock:    MockConnector{db: db, broker: broker},
 		model.ProviderGmail:   OAuthAPIConnector{provider: model.ProviderGmail, db: db, broker: broker},
@@ -38,13 +38,13 @@ func (r *Registry) For(provider model.Provider) (Connector, bool) {
 }
 
 type MockConnector struct {
-	db     *store.Memory
+	db     store.MailStore
 	broker *events.Broker
 }
 
 type OAuthAPIConnector struct {
 	provider model.Provider
-	db       *store.Memory
+	db       store.MailStore
 	broker   *events.Broker
 }
 
@@ -69,7 +69,10 @@ func (m MockConnector) AuthorizeURL(state string) (string, error) {
 }
 
 func (m MockConnector) Sync(ctx context.Context, account model.Account) error {
-	folders := m.db.ListFolders(account.ID)
+	folders, err := m.db.ListFolders(ctx, account.ID)
+	if err != nil {
+		return err
+	}
 	if len(folders) == 0 {
 		return errors.New("mock account has no folders")
 	}
@@ -94,7 +97,10 @@ func (m MockConnector) Sync(ctx context.Context, account model.Account) error {
 		BodyHTML:   "<p>同步任务完成。</p><p>真实 connector 接入后，这里会写入远端邮箱增量变化。</p>",
 		ReceivedAt: &now, Labels: []string{"inbox"}, CreatedAt: now, UpdatedAt: now,
 	}
-	msg = m.db.UpsertMessage(msg)
+	msg, err = m.db.UpsertMessage(ctx, msg)
+	if err != nil {
+		return err
+	}
 	m.broker.Publish(model.Event{Type: "message.created", AccountID: account.ID, MessageID: msg.ID, Payload: msg})
 	return nil
 }
@@ -107,7 +113,11 @@ func (m MockConnector) Send(ctx context.Context, account model.Account, req mode
 		return "", err
 	}
 	var sentFolder model.Folder
-	for _, folder := range m.db.ListFolders(account.ID) {
+	folders, err := m.db.ListFolders(ctx, account.ID)
+	if err != nil {
+		return "", err
+	}
+	for _, folder := range folders {
 		if folder.Role == "sent" {
 			sentFolder = folder
 			break
@@ -128,7 +138,10 @@ func (m MockConnector) Send(ctx context.Context, account model.Account, req mode
 		BodyText: req.BodyText, BodyHTML: req.BodyHTML, SentAt: &now, IsRead: true,
 		Labels: []string{"sent"}, Attachments: req.Attachments, CreatedAt: now, UpdatedAt: now,
 	}
-	msg = m.db.UpsertMessage(msg)
+	msg, err = m.db.UpsertMessage(ctx, msg)
+	if err != nil {
+		return "", err
+	}
 	m.broker.Publish(model.Event{Type: "message.sent", AccountID: account.ID, MessageID: msg.ID, Payload: msg})
 	return msg.ProviderID, nil
 }

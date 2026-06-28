@@ -13,15 +13,20 @@ import (
 func TestOutboxWorkerPublishesUpdatedFailureState(t *testing.T) {
 	db := store.NewMemory()
 	broker := events.NewBroker()
-	account := db.CreateAccount(model.Account{
+	account, err := db.CreateAccount(context.Background(), model.Account{
 		Provider: model.ProviderMock,
 		Email:    "owner@example.com",
 	})
-	db.EnqueueOutbox(model.SendRequest{
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.EnqueueOutbox(context.Background(), model.SendRequest{
 		AccountID: account.ID,
 		To:        []model.Address{{Email: "reader@example.com"}},
 		Subject:   "Queued",
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 	ch, unsubscribe := broker.Subscribe()
 	defer unsubscribe()
 	worker := NewOutboxWorker(db, &Registry{

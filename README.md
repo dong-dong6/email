@@ -7,7 +7,7 @@
 - `docker-compose.yml`：Go API 与 PostgreSQL 的 VPS 部署配置。
 - `docs/`：OpenAPI、架构说明和部署手册。
 
-当前实现已经包含认证、账户/文件夹/邮件/草稿/发件/规则/设置 API、SSE 事件、加密 blob 存储、mock connector、IMAP 收信、SMTP 发信、Flutter 自适应 UI 和 HTTP 接入层。Gmail/Outlook 已改为官方 OAuth 授权入口，后续接入 Gmail API / Microsoft Graph token 交换和同步；其他邮箱继续使用通用 IMAP/SMTP。
+当前实现已经包含认证、账户/文件夹/邮件/草稿/发件/规则/设置 API、SSE 事件、加密 blob 存储、PostgreSQL 主数据持久化、mock connector、IMAP 收信、SMTP 发信、Flutter 自适应 UI 和 HTTP 接入层。Gmail/Outlook 已改为官方 OAuth 授权入口并支持 token 交换和基础同步；其他邮箱继续使用通用 IMAP/SMTP。
 
 ## 本地运行
 
@@ -34,6 +34,8 @@ docker compose up -d --build
 ```
 
 默认会把 Go 后端直接暴露在 `http://服务器IP:8080`，客户端登录页填写这个服务地址即可。需要改端口时再复制 `.env.example` 为 `.env`。
+
+Docker 部署默认启用 PostgreSQL，账号、文件夹、邮件、草稿、规则、设置和发件队列都会写入 `postgres-data` volume；正文附件等 blob 继续写入 `mail-data` volume。两个 volume 和 `master.key` 需要一起备份。
 
 ## 添加真实邮箱
 

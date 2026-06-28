@@ -41,7 +41,7 @@ func (c OAuthAPIConnector) Sync(ctx context.Context, account model.Account) erro
 	if c.db == nil {
 		return errors.New("oauth connector store is not configured")
 	}
-	folder, err := folderByRole(c.db, account.ID, "inbox")
+	folder, err := folderByRole(ctx, c.db, account.ID, "inbox")
 	if err != nil {
 		return err
 	}
@@ -94,13 +94,18 @@ func (c OAuthAPIConnector) authorizedToken(ctx context.Context, account model.Ac
 		return token, err
 	}
 	account.Password = string(data)
-	c.db.UpdateAccount(account)
+	if err := c.db.UpdateAccount(ctx, account); err != nil {
+		return token, err
+	}
 	slog.Info("oauth token refresh completed", "provider", c.provider, "account_id", account.ID, "email", account.Email)
 	return refreshed, nil
 }
 
 func (c OAuthAPIConnector) refreshToken(ctx context.Context, token oauthToken) (oauthToken, error) {
-	settings := c.db.Settings()
+	settings, err := c.db.Settings(ctx)
+	if err != nil {
+		return oauthToken{}, err
+	}
 	var tokenURL, clientID, clientSecret string
 	switch c.provider {
 	case model.ProviderGmail:
@@ -259,7 +264,10 @@ func (c OAuthAPIConnector) syncGmailHistory(ctx context.Context, account model.A
 		}
 		pageToken = history.NextPageToken
 	}
-	deleted := c.deleteGmailMessages(account, removedFromInbox, forceRefresh)
+	deleted, err := c.deleteGmailMessages(ctx, account, removedFromInbox, forceRefresh)
+	if err != nil {
+		return err
+	}
 	fetchIDs := filterDeletedGmailIDs(ids, removedFromInbox, forceRefresh)
 	result := c.fetchAndStoreGmailMessages(ctx, account, folder, accessToken, fetchIDs, forceRefresh)
 	latestHistoryID = newerGmailHistoryID(latestHistoryID, result.LatestHistoryID)
@@ -320,7 +328,11 @@ func (c OAuthAPIConnector) fetchAndStoreGmailMessages(ctx context.Context, accou
 			defer wg.Done()
 			for id := range jobs {
 				providerID := "gmail:" + id
-				existing, ok := c.db.FindMessageByProvider(account.ID, providerID)
+				existing, ok, err := c.db.FindMessageByProvider(ctx, account.ID, providerID)
+				if err != nil {
+					outcomes <- gmailFetchOutcome{ID: id, Err: err}
+					continue
+				}
 				if ok && !forceRefresh[id] {
 					outcomes <- gmailFetchOutcome{ID: id, Skipped: true}
 					continue
@@ -366,7 +378,12 @@ func (c OAuthAPIConnector) fetchAndStoreGmailMessages(ctx context.Context, accou
 			slog.Warn("gmail message fetch failed", "account_id", account.ID, "email", account.Email, "provider_id", outcome.ID, "error", outcome.Err)
 			continue
 		}
-		msg := c.db.UpsertMessage(outcome.Message)
+		msg, err := c.db.UpsertMessage(ctx, outcome.Message)
+		if err != nil {
+			result.Failed++
+			slog.Warn("gmail message store failed", "account_id", account.ID, "email", account.Email, "provider_id", outcome.ID, "error", err)
+			continue
+		}
 		c.broker.Publish(model.Event{Type: "message.synced", AccountID: account.ID, MessageID: msg.ID, Payload: msg})
 		result.LatestHistoryID = newerGmailHistoryID(result.LatestHistoryID, outcome.HistoryID)
 		result.Synced++
@@ -374,24 +391,27 @@ func (c OAuthAPIConnector) fetchAndStoreGmailMessages(ctx context.Context, accou
 	return result
 }
 
-func (c OAuthAPIConnector) deleteGmailMessages(account model.Account, ids map[string]bool, forceRefresh map[string]bool) int {
+func (c OAuthAPIConnector) deleteGmailMessages(ctx context.Context, account model.Account, ids map[string]bool, forceRefresh map[string]bool) (int, error) {
 	deleted := 0
 	for id := range ids {
 		if forceRefresh[id] {
 			continue
 		}
-		existing, ok := c.db.FindMessageByProvider(account.ID, "gmail:"+id)
+		existing, ok, err := c.db.FindMessageByProvider(ctx, account.ID, "gmail:"+id)
+		if err != nil {
+			return deleted, err
+		}
 		if !ok {
 			continue
 		}
-		if err := c.db.DeleteMessage(existing.ID); err != nil {
+		if err := c.db.DeleteMessage(ctx, existing.ID); err != nil {
 			slog.Warn("gmail local message delete failed", "account_id", account.ID, "email", account.Email, "provider_id", id, "message_id", existing.ID, "error", err)
 			continue
 		}
 		c.broker.Publish(model.Event{Type: "message.deleted", AccountID: account.ID, MessageID: existing.ID})
 		deleted++
 	}
-	return deleted
+	return deleted, nil
 }
 
 func (c OAuthAPIConnector) saveGmailHistoryCursor(account model.Account, historyID string) {
@@ -399,13 +419,14 @@ func (c OAuthAPIConnector) saveGmailHistoryCursor(account model.Account, history
 	if historyID == "" {
 		return
 	}
-	if current, ok := c.db.GetAccount(account.ID); ok {
+	ctx := context.Background()
+	if current, ok, err := c.db.GetAccount(ctx, account.ID); err == nil && ok {
 		current.SyncCursor = gmailSyncCursorPrefix + historyID
-		c.db.UpdateAccount(current)
+		_ = c.db.UpdateAccount(ctx, current)
 		return
 	}
 	account.SyncCursor = gmailSyncCursorPrefix + historyID
-	c.db.UpdateAccount(account)
+	_ = c.db.UpdateAccount(ctx, account)
 }
 
 func (c OAuthAPIConnector) fetchGmailMessage(ctx context.Context, account model.Account, folder model.Folder, accessToken string, id string) (model.Message, string, error) {
@@ -489,11 +510,18 @@ func (c OAuthAPIConnector) syncOutlook(ctx context.Context, account model.Accoun
 			CreatedAt:      time.Now(),
 			UpdatedAt:      time.Now(),
 		}
-		if existing, ok := c.db.FindMessageByProvider(account.ID, msg.ProviderID); ok {
+		existing, ok, err := c.db.FindMessageByProvider(ctx, account.ID, msg.ProviderID)
+		if err != nil {
+			return err
+		}
+		if ok {
 			msg.ID = existing.ID
 			msg.CreatedAt = existing.CreatedAt
 		}
-		msg = c.db.UpsertMessage(msg)
+		msg, err = c.db.UpsertMessage(ctx, msg)
+		if err != nil {
+			return err
+		}
 		c.broker.Publish(model.Event{Type: "message.synced", AccountID: account.ID, MessageID: msg.ID, Payload: msg})
 		synced++
 	}

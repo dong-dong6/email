@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -19,6 +22,8 @@ type Postgres struct {
 	secrets *SecretKeeper
 }
 
+var _ MailStore = (*Postgres)(nil)
+
 func NewPostgres(ctx context.Context, databaseURL string, key ...[]byte) (*Postgres, error) {
 	pool, err := pgxpool.New(ctx, databaseURL)
 	if err != nil {
@@ -27,6 +32,10 @@ func NewPostgres(ctx context.Context, databaseURL string, key ...[]byte) (*Postg
 	if err := pool.Ping(ctx); err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("ping: %w", err)
+	}
+	if err := applyMigrations(ctx, pool); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("apply migrations: %w", err)
 	}
 	var secretKey []byte
 	if len(key) > 0 {
@@ -38,6 +47,50 @@ func NewPostgres(ctx context.Context, databaseURL string, key ...[]byte) (*Postg
 		return nil, err
 	}
 	return &Postgres{pool: pool, secrets: secrets}, nil
+}
+
+func applyMigrations(ctx context.Context, pool *pgxpool.Pool) error {
+	dirs := []string{
+		strings.TrimSpace(os.Getenv("DATABASE_MIGRATIONS_DIR")),
+		"migrations",
+		"../migrations",
+		"../../migrations",
+		"/app/migrations",
+	}
+	for _, dir := range dirs {
+		if dir == "" {
+			continue
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return err
+		}
+		var files []string
+		for _, entry := range entries {
+			if entry.IsDir() || filepath.Ext(entry.Name()) != ".sql" {
+				continue
+			}
+			files = append(files, filepath.Join(dir, entry.Name()))
+		}
+		sort.Strings(files)
+		for _, file := range files {
+			sql, err := os.ReadFile(file)
+			if err != nil {
+				return err
+			}
+			if strings.TrimSpace(string(sql)) == "" {
+				continue
+			}
+			if _, err := pool.Exec(ctx, string(sql)); err != nil {
+				return fmt.Errorf("%s: %w", file, err)
+			}
+		}
+		return nil
+	}
+	return nil
 }
 
 func (p *Postgres) Close() {
@@ -148,7 +201,7 @@ func (p *Postgres) CreateAccount(ctx context.Context, account model.Account) (mo
 	return account, nil
 }
 
-func (p *Postgres) GetAccount(ctx context.Context, id string) (model.Account, bool) {
+func (p *Postgres) GetAccount(ctx context.Context, id string) (model.Account, bool, error) {
 	var a model.Account
 	err := p.pool.QueryRow(ctx, `
 		SELECT id, provider, email, display_name, username, password_secret,
@@ -159,15 +212,20 @@ func (p *Postgres) GetAccount(ctx context.Context, id string) (model.Account, bo
 		&a.IMAPHost, &a.IMAPPort, &a.IMAPTLS, &a.SMTPHost, &a.SMTPPort, &a.SMTPTLS,
 		&a.Status, &a.SyncCursor, &a.LastError, &a.CreatedAt, &a.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return model.Account{}, false
+		return model.Account{}, false, nil
 	}
-	return p.decryptAccount(a), err == nil
+	if err != nil {
+		return model.Account{}, false, err
+	}
+	return p.decryptAccount(a), true, nil
 }
 
 func (p *Postgres) UpdateAccount(ctx context.Context, account model.Account) error {
 	account.UpdatedAt = time.Now()
 	if account.Password == "" {
-		if existing, ok := p.GetAccount(ctx, account.ID); ok {
+		if existing, ok, err := p.GetAccount(ctx, account.ID); err != nil {
+			return err
+		} else if ok {
 			account.Password = existing.Password
 		}
 	}
@@ -224,11 +282,26 @@ func (p *Postgres) ListFolders(ctx context.Context, accountID string) ([]model.F
 	return folders, rows.Err()
 }
 
+func (p *Postgres) GetFolder(ctx context.Context, id string) (model.Folder, bool, error) {
+	var f model.Folder
+	err := p.pool.QueryRow(ctx, `
+		SELECT id, account_id, provider_id, name, role, unread_count, total_count
+		FROM folders WHERE id = $1
+	`, id).Scan(&f.ID, &f.AccountID, &f.ProviderID, &f.Name, &f.Role, &f.UnreadCount, &f.TotalCount)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return model.Folder{}, false, nil
+	}
+	if err != nil {
+		return model.Folder{}, false, err
+	}
+	return f, true, nil
+}
+
 func (p *Postgres) UpsertFolder(ctx context.Context, folder model.Folder) error {
 	_, err := p.pool.Exec(ctx, `
 		INSERT INTO folders (id, account_id, provider_id, name, role, unread_count, total_count)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
-		ON CONFLICT (id) DO UPDATE SET unread_count=$6, total_count=$7
+		ON CONFLICT (id) DO UPDATE SET account_id=$2, provider_id=$3, name=$4, role=$5, unread_count=$6, total_count=$7
 	`, folder.ID, folder.AccountID, folder.ProviderID, folder.Name, folder.Role, folder.UnreadCount, folder.TotalCount)
 	return err
 }
@@ -267,24 +340,30 @@ func (p *Postgres) ListMessages(ctx context.Context, filter MessageFilter) ([]mo
 	var messages []model.Message
 	for rows.Next() {
 		var m model.Message
-		var fromJSON, toJSON []byte
+		var fromJSON, recipientsJSON []byte
 		var labels []string
 		if err := rows.Scan(&m.ID, &m.AccountID, &m.FolderID, &m.ThreadID, &m.ProviderID,
-			&fromJSON, &toJSON, &m.Subject, &m.Snippet, &m.BodyText, &m.BodyHTML,
+			&fromJSON, &recipientsJSON, &m.Subject, &m.Snippet, &m.BodyText, &m.BodyHTML,
 			&m.ReceivedAt, &m.SentAt, &m.IsRead, &m.IsStarred, &labels, &m.CreatedAt, &m.UpdatedAt); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal(fromJSON, &m.From)
-		_ = json.Unmarshal(toJSON, &m.To)
+		unmarshalRecipients(recipientsJSON, &m)
 		m.Labels = labels
+		attachments, err := p.attachmentsForMessage(ctx, m.ID)
+		if err != nil {
+			return nil, err
+		}
+		m.Attachments = attachments
+		m.HasAttachments = len(attachments) > 0
 		messages = append(messages, m)
 	}
 	return messages, rows.Err()
 }
 
-func (p *Postgres) GetMessage(ctx context.Context, id string) (model.Message, bool) {
+func (p *Postgres) GetMessage(ctx context.Context, id string) (model.Message, bool, error) {
 	var m model.Message
-	var fromJSON, toJSON []byte
+	var fromJSON, recipientsJSON []byte
 	var labels []string
 	err := p.pool.QueryRow(ctx, `
 		SELECT id, account_id, folder_id, thread_id, provider_id, sender, recipients,
@@ -292,20 +371,29 @@ func (p *Postgres) GetMessage(ctx context.Context, id string) (model.Message, bo
 		       is_read, is_starred, labels, created_at, updated_at
 		FROM messages WHERE id = $1
 	`, id).Scan(&m.ID, &m.AccountID, &m.FolderID, &m.ThreadID, &m.ProviderID,
-		&fromJSON, &toJSON, &m.Subject, &m.Snippet, &m.BodyText, &m.BodyHTML,
+		&fromJSON, &recipientsJSON, &m.Subject, &m.Snippet, &m.BodyText, &m.BodyHTML,
 		&m.ReceivedAt, &m.SentAt, &m.IsRead, &m.IsStarred, &labels, &m.CreatedAt, &m.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return model.Message{}, false
+		return model.Message{}, false, nil
+	}
+	if err != nil {
+		return model.Message{}, false, err
 	}
 	_ = json.Unmarshal(fromJSON, &m.From)
-	_ = json.Unmarshal(toJSON, &m.To)
+	unmarshalRecipients(recipientsJSON, &m)
 	m.Labels = labels
-	return m, err == nil
+	attachments, err := p.attachmentsForMessage(ctx, m.ID)
+	if err != nil {
+		return model.Message{}, false, err
+	}
+	m.Attachments = attachments
+	m.HasAttachments = len(attachments) > 0
+	return m, true, nil
 }
 
-func (p *Postgres) FindMessageByProvider(ctx context.Context, accountID, providerID string) (model.Message, bool) {
+func (p *Postgres) FindMessageByProvider(ctx context.Context, accountID, providerID string) (model.Message, bool, error) {
 	var m model.Message
-	var fromJSON, toJSON []byte
+	var fromJSON, recipientsJSON []byte
 	var labels []string
 	err := p.pool.QueryRow(ctx, `
 		SELECT id, account_id, folder_id, thread_id, provider_id, sender, recipients,
@@ -313,15 +401,24 @@ func (p *Postgres) FindMessageByProvider(ctx context.Context, accountID, provide
 		       is_read, is_starred, labels, created_at, updated_at
 		FROM messages WHERE account_id = $1 AND provider_id = $2
 	`, accountID, providerID).Scan(&m.ID, &m.AccountID, &m.FolderID, &m.ThreadID, &m.ProviderID,
-		&fromJSON, &toJSON, &m.Subject, &m.Snippet, &m.BodyText, &m.BodyHTML,
+		&fromJSON, &recipientsJSON, &m.Subject, &m.Snippet, &m.BodyText, &m.BodyHTML,
 		&m.ReceivedAt, &m.SentAt, &m.IsRead, &m.IsStarred, &labels, &m.CreatedAt, &m.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return model.Message{}, false
+		return model.Message{}, false, nil
+	}
+	if err != nil {
+		return model.Message{}, false, err
 	}
 	_ = json.Unmarshal(fromJSON, &m.From)
-	_ = json.Unmarshal(toJSON, &m.To)
+	unmarshalRecipients(recipientsJSON, &m)
 	m.Labels = labels
-	return m, err == nil
+	attachments, err := p.attachmentsForMessage(ctx, m.ID)
+	if err != nil {
+		return model.Message{}, false, err
+	}
+	m.Attachments = attachments
+	m.HasAttachments = len(attachments) > 0
+	return m, true, nil
 }
 
 func (p *Postgres) UpsertMessage(ctx context.Context, msg model.Message) (model.Message, error) {
@@ -333,26 +430,38 @@ func (p *Postgres) UpsertMessage(ctx context.Context, msg model.Message) (model.
 	msg.UpdatedAt = now
 	msg.HasAttachments = len(msg.Attachments) > 0
 	fromJSON, _ := json.Marshal(msg.From)
-	toJSON, _ := json.Marshal(msg.To)
+	recipientsJSON, _ := json.Marshal(messageRecipients{To: msg.To, Cc: msg.Cc, Bcc: msg.Bcc})
 	_, err := p.pool.Exec(ctx, `
 		INSERT INTO messages (id, account_id, folder_id, thread_id, provider_id, sender, recipients,
 		       subject, snippet, body_text_ref, body_html_ref, received_at, sent_at,
-		       is_read, is_starred, labels, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
-		ON CONFLICT (id) DO UPDATE SET sender=$6, recipients=$7, subject=$8, snippet=$9,
+		       is_read, is_starred, labels, search_text, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15, $16,
+		       to_tsvector('simple', concat_ws(' ', $8::text, $9::text, $10::text, $11::text, $6::jsonb::text, $7::jsonb::text)), $17, $18)
+		ON CONFLICT (id) DO UPDATE SET sender=$6::jsonb, recipients=$7::jsonb, subject=$8, snippet=$9,
 		       body_text_ref=$10, body_html_ref=$11, received_at=$12, sent_at=$13,
-		       is_read=$14, is_starred=$15, labels=$16, updated_at=$18
+		       is_read=$14, is_starred=$15, labels=$16,
+		       search_text=to_tsvector('simple', concat_ws(' ', $8::text, $9::text, $10::text, $11::text, $6::jsonb::text, $7::jsonb::text)),
+		       updated_at=$18
 	`, msg.ID, msg.AccountID, msg.FolderID, msg.ThreadID, msg.ProviderID,
-		fromJSON, toJSON, msg.Subject, msg.Snippet, msg.BodyText, msg.BodyHTML,
+		fromJSON, recipientsJSON, msg.Subject, msg.Snippet, msg.BodyText, msg.BodyHTML,
 		msg.ReceivedAt, msg.SentAt, msg.IsRead, msg.IsStarred, msg.Labels, msg.CreatedAt, msg.UpdatedAt)
 	if err != nil {
+		return model.Message{}, err
+	}
+	if err := p.replaceAttachments(ctx, msg); err != nil {
+		return model.Message{}, err
+	}
+	if err := p.RecountFolders(ctx); err != nil {
 		return model.Message{}, err
 	}
 	return msg, nil
 }
 
 func (p *Postgres) PatchMessage(ctx context.Context, id string, read *bool, starred *bool) (model.Message, error) {
-	msg, ok := p.GetMessage(ctx, id)
+	msg, ok, err := p.GetMessage(ctx, id)
+	if err != nil {
+		return model.Message{}, err
+	}
 	if !ok {
 		return model.Message{}, ErrNotFound
 	}
@@ -363,18 +472,25 @@ func (p *Postgres) PatchMessage(ctx context.Context, id string, read *bool, star
 		msg.IsStarred = *starred
 	}
 	msg.UpdatedAt = time.Now()
-	_, err := p.pool.Exec(ctx, "UPDATE messages SET is_read=$2, is_starred=$3, updated_at=$4 WHERE id=$1",
+	_, err = p.pool.Exec(ctx, "UPDATE messages SET is_read=$2, is_starred=$3, updated_at=$4 WHERE id=$1",
 		id, msg.IsRead, msg.IsStarred, msg.UpdatedAt)
+	if err != nil {
+		return model.Message{}, err
+	}
+	err = p.RecountFolders(ctx)
 	return msg, err
 }
 
 func (p *Postgres) MoveMessage(ctx context.Context, id, folderID string) (model.Message, error) {
-	msg, ok := p.GetMessage(ctx, id)
+	msg, ok, err := p.GetMessage(ctx, id)
+	if err != nil {
+		return model.Message{}, err
+	}
 	if !ok {
 		return model.Message{}, ErrNotFound
 	}
 	var folderAccountID string
-	err := p.pool.QueryRow(ctx, "SELECT account_id FROM folders WHERE id=$1", folderID).Scan(&folderAccountID)
+	err = p.pool.QueryRow(ctx, "SELECT account_id FROM folders WHERE id=$1", folderID).Scan(&folderAccountID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return model.Message{}, ErrNotFound
 	}
@@ -388,6 +504,10 @@ func (p *Postgres) MoveMessage(ctx context.Context, id, folderID string) (model.
 	msg.UpdatedAt = time.Now()
 	_, err = p.pool.Exec(ctx, "UPDATE messages SET folder_id=$2, updated_at=$3 WHERE id=$1",
 		id, folderID, msg.UpdatedAt)
+	if err != nil {
+		return model.Message{}, err
+	}
+	err = p.RecountFolders(ctx)
 	return msg, err
 }
 
@@ -399,7 +519,7 @@ func (p *Postgres) DeleteMessage(ctx context.Context, id string) error {
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
 	}
-	return nil
+	return p.RecountFolders(ctx)
 }
 
 func (p *Postgres) ListDrafts(ctx context.Context) ([]model.Draft, error) {
@@ -436,8 +556,14 @@ func (p *Postgres) SaveDraft(ctx context.Context, draft model.Draft) (model.Draf
 }
 
 func (p *Postgres) DeleteDraft(ctx context.Context, id string) error {
-	_, err := p.pool.Exec(ctx, "DELETE FROM drafts WHERE id=$1", id)
-	return err
+	tag, err := p.pool.Exec(ctx, "DELETE FROM drafts WHERE id=$1", id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func (p *Postgres) EnqueueOutbox(ctx context.Context, req model.SendRequest) (model.OutboxItem, error) {
@@ -474,11 +600,21 @@ func (p *Postgres) PendingOutbox(ctx context.Context, limit int) ([]model.Outbox
 	return items, rows.Err()
 }
 
-func (p *Postgres) MarkOutbox(ctx context.Context, id, status, lastError string) error {
-	_, err := p.pool.Exec(ctx, `
+func (p *Postgres) MarkOutbox(ctx context.Context, id, status, lastError string) (model.OutboxItem, error) {
+	var item model.OutboxItem
+	var payload []byte
+	err := p.pool.QueryRow(ctx, `
 		UPDATE outbox SET status=$2, last_error=$3, attempts=attempts+1, updated_at=$4 WHERE id=$1
-	`, id, status, lastError, time.Now())
-	return err
+		RETURNING id, account_id, payload, status, attempts, last_error, created_at, updated_at
+	`, id, status, lastError, time.Now()).Scan(&item.ID, &item.AccountID, &payload, &item.Status, &item.Attempts, &item.LastError, &item.CreatedAt, &item.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return model.OutboxItem{}, ErrNotFound
+	}
+	if err != nil {
+		return model.OutboxItem{}, err
+	}
+	_ = json.Unmarshal(payload, &item.Payload)
+	return item, nil
 }
 
 func (p *Postgres) ListRules(ctx context.Context) ([]model.Rule, error) {
@@ -509,8 +645,14 @@ func (p *Postgres) CreateRule(ctx context.Context, rule model.Rule) (model.Rule,
 }
 
 func (p *Postgres) DeleteRule(ctx context.Context, id string) error {
-	_, err := p.pool.Exec(ctx, "DELETE FROM rules WHERE id=$1", id)
-	return err
+	tag, err := p.pool.Exec(ctx, "DELETE FROM rules WHERE id=$1", id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func (p *Postgres) Settings(ctx context.Context) (model.Settings, error) {
@@ -528,16 +670,84 @@ func (p *Postgres) Settings(ctx context.Context) (model.Settings, error) {
 			MicrosoftClientSecret: "",
 		}, nil
 	}
-	return s, err
+	if err != nil {
+		return model.Settings{}, err
+	}
+	s.GmailClientSecret = p.secrets.Decrypt(s.GmailClientSecret)
+	s.MicrosoftClientSecret = p.secrets.Decrypt(s.MicrosoftClientSecret)
+	return s, nil
 }
 
 func (p *Postgres) UpdateSettings(ctx context.Context, settings model.Settings) (model.Settings, error) {
+	stored := settings
+	stored.GmailClientSecret = p.secrets.Encrypt(stored.GmailClientSecret)
+	stored.MicrosoftClientSecret = p.secrets.Encrypt(stored.MicrosoftClientSecret)
 	_, err := p.pool.Exec(ctx, `
 		INSERT INTO settings (id, remote_images_default, density, signature_html, gmail_client_id, gmail_client_secret, microsoft_client_id, microsoft_client_secret)
 		VALUES (TRUE, $1, $2, $3, $4, $5, $6, $7)
 		ON CONFLICT (id) DO UPDATE SET remote_images_default=$1, density=$2, signature_html=$3, gmail_client_id=$4, gmail_client_secret=$5, microsoft_client_id=$6, microsoft_client_secret=$7
-	`, settings.RemoteImagesDefault, settings.Density, settings.SignatureHTML, settings.GmailClientID, settings.GmailClientSecret, settings.MicrosoftClientID, settings.MicrosoftClientSecret)
+	`, stored.RemoteImagesDefault, stored.Density, stored.SignatureHTML, stored.GmailClientID, stored.GmailClientSecret, stored.MicrosoftClientID, stored.MicrosoftClientSecret)
 	return settings, err
+}
+
+type messageRecipients struct {
+	To  []model.Address `json:"to"`
+	Cc  []model.Address `json:"cc,omitempty"`
+	Bcc []model.Address `json:"bcc,omitempty"`
+}
+
+func unmarshalRecipients(data []byte, msg *model.Message) {
+	var recipients messageRecipients
+	if err := json.Unmarshal(data, &recipients); err == nil && (recipients.To != nil || recipients.Cc != nil || recipients.Bcc != nil) {
+		msg.To = recipients.To
+		msg.Cc = recipients.Cc
+		msg.Bcc = recipients.Bcc
+		return
+	}
+	var legacy []model.Address
+	if err := json.Unmarshal(data, &legacy); err == nil {
+		msg.To = legacy
+	}
+}
+
+func (p *Postgres) attachmentsForMessage(ctx context.Context, messageID string) ([]model.Attachment, error) {
+	rows, err := p.pool.Query(ctx, `
+		SELECT id, message_id, file_name, content_type, size, blob_id, inline, content_id
+		FROM attachments WHERE message_id=$1 ORDER BY file_name
+	`, messageID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var attachments []model.Attachment
+	for rows.Next() {
+		var attachment model.Attachment
+		if err := rows.Scan(&attachment.ID, &attachment.MessageID, &attachment.FileName, &attachment.ContentType, &attachment.Size, &attachment.BlobID, &attachment.Inline, &attachment.ContentID); err != nil {
+			return nil, err
+		}
+		attachments = append(attachments, attachment)
+	}
+	return attachments, rows.Err()
+}
+
+func (p *Postgres) replaceAttachments(ctx context.Context, msg model.Message) error {
+	if _, err := p.pool.Exec(ctx, "DELETE FROM attachments WHERE message_id=$1", msg.ID); err != nil {
+		return err
+	}
+	for _, attachment := range msg.Attachments {
+		if attachment.ID == "" {
+			attachment.ID = NewID("att")
+		}
+		attachment.MessageID = msg.ID
+		_, err := p.pool.Exec(ctx, `
+			INSERT INTO attachments (id, message_id, file_name, content_type, size, blob_id, inline, content_id)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		`, attachment.ID, attachment.MessageID, attachment.FileName, attachment.ContentType, attachment.Size, attachment.BlobID, attachment.Inline, attachment.ContentID)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (p *Postgres) RecountFolders(ctx context.Context) error {

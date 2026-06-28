@@ -31,6 +31,8 @@ curl http://你的VPS_IP:8080/healthz
 BACKUP_DIR=./backups scripts/backup.sh
 ```
 
+Docker 默认使用 PostgreSQL 保存账号、文件夹、邮件元数据、草稿、规则、设置和 outbox。附件/正文 blob 与 `master.key` 保存在 `mail-data`，数据库保存在 `postgres-data`；恢复时两者要配套恢复，否则加密字段无法解密。
+
 客户端登录页的“服务地址”填写 Go 后端地址，不要加 `/api/v1`。OAuth 回调地址会基于这个服务地址生成，例如 `http://你的VPS_IP:8080/api/v1/oauth/gmail/callback`。
 
 首次连接全新服务时，客户端会自动进入创建管理员账户流程。服务端会在数据卷中自动生成 `master.key` 作为加密主密钥；这个文件随 `mail-data` volume 保存，不要删除旧 volume 后继续期望读取旧加密数据。

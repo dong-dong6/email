@@ -44,22 +44,25 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	db, err := store.NewMemoryWithKey(cfg.MasterKey)
-	if err != nil {
-		return fmt.Errorf("init memory store: %w", err)
-	}
-
+	var db store.MailStore
 	var userStore auth.UserStore
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL != "" {
 		pgStore, err := store.NewPostgres(ctx, databaseURL, cfg.MasterKey)
 		if err != nil {
-			slog.Warn("failed to connect to postgres, using config-based auth", "error", err)
-		} else {
-			defer pgStore.Close()
-			userStore = store.NewUserStoreAdapter(pgStore)
-			slog.Info("PostgreSQL connected for user management")
+			return fmt.Errorf("init postgres store: %w", err)
 		}
+		defer pgStore.Close()
+		db = pgStore
+		userStore = store.NewUserStoreAdapter(pgStore)
+		slog.Info("PostgreSQL connected for mailbox and user management")
+	} else {
+		memoryStore, err := store.NewMemoryWithKey(cfg.MasterKey)
+		if err != nil {
+			return fmt.Errorf("init memory store: %w", err)
+		}
+		db = memoryStore
+		slog.Warn("DATABASE_URL is empty; using in-memory mailbox store")
 	}
 
 	broker := events.NewBroker()

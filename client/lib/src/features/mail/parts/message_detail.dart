@@ -46,6 +46,16 @@ class _MessageDetail extends StatelessWidget {
                   ),
                 ),
                 Tooltip(
+                  message: message.isRead ? '标为未读' : '标为已读',
+                  child: IconButton(
+                    onPressed: () =>
+                        state.markMessageRead(message, !message.isRead),
+                    icon: Icon(message.isRead
+                        ? Icons.mark_email_unread_outlined
+                        : Icons.mark_email_read_outlined),
+                  ),
+                ),
+                Tooltip(
                   message: '回复',
                   child: IconButton(
                     onPressed: () =>
@@ -102,8 +112,7 @@ class _MessageDetail extends StatelessWidget {
                               value: 'move:${folder.id}',
                               child: ListTile(
                                 leading: Icon(_folderIcon(folder.role)),
-                                title:
-                                    Text('移到 ${_folderDisplayName(folder)}'),
+                                title: Text('移到 ${_folderDisplayName(folder)}'),
                                 dense: true,
                               ),
                             )),
@@ -303,7 +312,11 @@ class _HtmlMessageView extends StatelessWidget {
   Widget build(BuildContext context) {
     final document = html_parser.parse(html);
     final nodes = document.body?.nodes ?? document.nodes;
+    final blockedImageCount =
+        nodes.fold<int>(0, (count, node) => count + _blockedImageCount(node));
     final blocks = [
+      if (blockedImageCount > 0)
+        _RemoteImagesNotice(blockedImageCount: blockedImageCount),
       for (final node in nodes)
         ..._htmlNodeToWidgets(
           context,
@@ -322,3 +335,44 @@ class _HtmlMessageView extends StatelessWidget {
   }
 }
 
+class _RemoteImagesNotice extends StatelessWidget {
+  const _RemoteImagesNotice({required this.blockedImageCount});
+
+  final int blockedImageCount;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: scheme.tertiaryContainer.withOpacity(0.58),
+          borderRadius: BorderRadius.circular(_MailDimens.radius),
+          border: Border.all(color: scheme.outlineVariant),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Row(
+            children: [
+              Icon(
+                Icons.privacy_tip_outlined,
+                color: scheme.onTertiaryContainer,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  '已阻止 $blockedImageCount 张远程图片',
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: scheme.onTertiaryContainer,
+                        fontWeight: FontWeight.w700,
+                      ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}

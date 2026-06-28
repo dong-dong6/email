@@ -8,8 +8,8 @@ class _MailDimens {
   static const double messageListWidth = 432;
   static const double tabletMessageListWidth = 372;
   static const double messageBodyMaxWidth = 760;
-  static const double compactTileHeight = 92;
-  static const double regularTileHeight = 112;
+  static const double compactTileHeight = 106;
+  static const double regularTileHeight = 124;
   static const double radius = 8;
   static const double panelPadding = 16;
 }

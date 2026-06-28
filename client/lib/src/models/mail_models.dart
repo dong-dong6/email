@@ -72,6 +72,17 @@ class MailFolder {
       totalCount: json['total_count'] as int? ?? 0,
     );
   }
+
+  MailFolder copyWith({int? unreadCount, int? totalCount}) {
+    return MailFolder(
+      id: id,
+      accountId: accountId,
+      name: name,
+      role: role,
+      unreadCount: unreadCount ?? this.unreadCount,
+      totalCount: totalCount ?? this.totalCount,
+    );
+  }
 }
 
 class MailAttachment {

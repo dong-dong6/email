@@ -42,6 +42,7 @@ class _MessageListState extends State<_MessageList> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final messages = widget.state.visibleMessages;
+    final hasSelection = widget.state.selectedMessageIds.isNotEmpty;
     return Column(
       children: [
         Padding(
@@ -74,7 +75,7 @@ class _MessageListState extends State<_MessageList> {
                       borderRadius: BorderRadius.circular(_MailDimens.radius),
                     ),
                     child: Text(
-                      '${messages.length}',
+                      _messageCountLabel(widget.state),
                       style: Theme.of(context).textTheme.labelMedium?.copyWith(
                             color: scheme.onSurfaceVariant,
                             fontWeight: FontWeight.w700,
@@ -101,6 +102,15 @@ class _MessageListState extends State<_MessageList> {
                     ),
                 ],
               ),
+              const SizedBox(height: 10),
+              _MessageFilterBar(state: widget.state),
+              if (hasSelection) ...[
+                const SizedBox(height: 10),
+                _BulkSelectionBar(
+                  state: widget.state,
+                  compact: widget.compact,
+                ),
+              ],
             ],
           ),
         ),
@@ -132,11 +142,15 @@ class _MessageListState extends State<_MessageList> {
                     return _MessageTile(
                       message: message,
                       selected: widget.state.selectedMessage?.id == message.id,
+                      selectedForBatch:
+                          widget.state.selectedMessageIds.contains(message.id),
                       compact: widget.compact,
                       onTap: () {
                         widget.state.selectMessage(message.id);
                         widget.onOpenMessage?.call();
                       },
+                      onToggleSelected: () =>
+                          widget.state.toggleMessageSelection(message.id),
                       onStar: () => widget.state.toggleStar(message),
                     );
                   },
@@ -147,19 +161,197 @@ class _MessageListState extends State<_MessageList> {
   }
 }
 
+class _MessageFilterBar extends StatelessWidget {
+  const _MessageFilterBar({required this.state});
+
+  final AppState state;
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: SegmentedButton<MailMessageFilter>(
+        showSelectedIcon: false,
+        segments: [
+          ButtonSegment(
+            value: MailMessageFilter.all,
+            icon: const Icon(Icons.all_inbox_rounded),
+            label: Text('全部 ${state.matchingMessages.length}'),
+          ),
+          ButtonSegment(
+            value: MailMessageFilter.unread,
+            icon: const Icon(Icons.mark_email_unread_outlined),
+            label: Text('未读 ${state.matchingUnreadCount}'),
+          ),
+          ButtonSegment(
+            value: MailMessageFilter.starred,
+            icon: const Icon(Icons.star_outline_rounded),
+            label: Text('星标 ${state.matchingStarredCount}'),
+          ),
+        ],
+        selected: {state.messageFilter},
+        onSelectionChanged: (values) => state.setMessageFilter(values.first),
+      ),
+    );
+  }
+}
+
+class _BulkSelectionBar extends StatelessWidget {
+  const _BulkSelectionBar({required this.state, required this.compact});
+
+  final AppState state;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final selected = state.selectedMessages;
+    final selectedCount = selected.length;
+    final allSelected = state.allVisibleMessagesSelected;
+    final hasUnread = selected.any((message) => !message.isRead);
+    final hasUnstarred = selected.any((message) => !message.isStarred);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: scheme.secondaryContainer.withOpacity(0.58),
+        borderRadius: BorderRadius.circular(_MailDimens.radius),
+        border: Border.all(color: scheme.outlineVariant),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        child: Row(
+          children: [
+            Checkbox(
+              tristate: true,
+              value: allSelected
+                  ? true
+                  : state.anyVisibleMessagesSelected
+                      ? null
+                      : false,
+              onChanged: (_) => state.setVisibleMessagesSelected(!allSelected),
+              visualDensity: VisualDensity.compact,
+            ),
+            Expanded(
+              child: Text(
+                '已选 $selectedCount',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                      color: scheme.onSecondaryContainer,
+                      fontWeight: FontWeight.w800,
+                    ),
+              ),
+            ),
+            Tooltip(
+              message: hasUnread ? '标为已读' : '标为未读',
+              child: IconButton(
+                onPressed: selectedCount == 0
+                    ? null
+                    : () => state.markSelectedRead(hasUnread),
+                icon: Icon(hasUnread
+                    ? Icons.mark_email_read_outlined
+                    : Icons.mark_email_unread_outlined),
+              ),
+            ),
+            Tooltip(
+              message: hasUnstarred ? '添加星标' : '取消星标',
+              child: IconButton(
+                onPressed: selectedCount == 0
+                    ? null
+                    : () => state.starSelected(hasUnstarred),
+                icon: Icon(hasUnstarred
+                    ? Icons.star_outline_rounded
+                    : Icons.star_rounded),
+                color: hasUnstarred ? null : _MailAccent.starred,
+              ),
+            ),
+            PopupMenuButton<String>(
+              tooltip: '移动到',
+              icon: const Icon(Icons.drive_file_move_outlined),
+              enabled: selectedCount > 0,
+              onSelected: state.moveSelectedMessages,
+              itemBuilder: (context) => [
+                for (final folder in state.visibleFolders.where(
+                  (folder) => folder.id != state.selectedFolder?.id,
+                ))
+                  PopupMenuItem(
+                    value: folder.id,
+                    child: ListTile(
+                      dense: true,
+                      leading: Icon(_folderIcon(folder.role)),
+                      title: Text(_folderDisplayName(folder)),
+                    ),
+                  ),
+              ],
+            ),
+            Tooltip(
+              message: '删除',
+              child: IconButton(
+                onPressed: selectedCount == 0
+                    ? null
+                    : () => _confirmDeleteSelected(context, state),
+                icon: const Icon(Icons.delete_outline_rounded),
+                color: scheme.error,
+              ),
+            ),
+            if (!compact)
+              Tooltip(
+                message: '取消选择',
+                child: IconButton(
+                  onPressed: state.clearMessageSelection,
+                  icon: const Icon(Icons.close_rounded),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _confirmDeleteSelected(
+    BuildContext context,
+    AppState state,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('删除所选邮件'),
+        content: Text('确认删除 ${state.selectedMessages.length} 封邮件？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton.icon(
+            onPressed: () => Navigator.of(context).pop(true),
+            icon: const Icon(Icons.delete_outline_rounded),
+            label: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      await state.deleteSelectedMessages();
+    }
+  }
+}
+
 class _MessageTile extends StatelessWidget {
   const _MessageTile({
     required this.message,
     required this.selected,
+    required this.selectedForBatch,
     required this.compact,
     required this.onTap,
+    required this.onToggleSelected,
     required this.onStar,
   });
 
   final MailMessage message;
   final bool selected;
+  final bool selectedForBatch;
   final bool compact;
   final VoidCallback onTap;
+  final VoidCallback onToggleSelected;
   final VoidCallback onStar;
 
   @override
@@ -174,11 +366,13 @@ class _MessageTile extends StatelessWidget {
     return AnimatedContainer(
       duration: _MailDurations.quick,
       height: height,
-      color: selected
-          ? scheme.secondaryContainer.withOpacity(0.42)
-          : message.isRead
-              ? Colors.transparent
-              : scheme.primaryContainer.withOpacity(0.16),
+      color: selectedForBatch
+          ? scheme.tertiaryContainer.withOpacity(0.48)
+          : selected
+              ? scheme.secondaryContainer.withOpacity(0.42)
+              : message.isRead
+                  ? Colors.transparent
+                  : scheme.primaryContainer.withOpacity(0.16),
       child: Material(
         color: Colors.transparent,
         child: InkWell(
@@ -193,10 +387,20 @@ class _MessageTile extends StatelessWidget {
                     ? scheme.primary
                     : Colors.transparent,
               ),
+              SizedBox(
+                width: compact ? 38 : 42,
+                child: Center(
+                  child: Checkbox(
+                    value: selectedForBatch,
+                    onChanged: (_) => onToggleSelected(),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ),
+              ),
               Expanded(
                 child: Padding(
                   padding: EdgeInsets.fromLTRB(
-                    12,
+                    4,
                     compact ? 10 : 12,
                     6,
                     compact ? 10 : 12,
@@ -213,7 +417,7 @@ class _MessageTile extends StatelessWidget {
                           size: message.isRead ? 6 : 9,
                         ),
                       ),
-                      const SizedBox(width: 10),
+                      const SizedBox(width: 8),
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -253,7 +457,9 @@ class _MessageTile extends StatelessWidget {
                             ),
                             const SizedBox(height: 5),
                             Text(
-                              message.subject.isEmpty ? '(无主题)' : message.subject,
+                              message.subject.isEmpty
+                                  ? '(无主题)'
+                                  : message.subject,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: titleStyle,
@@ -295,3 +501,11 @@ class _MessageTile extends StatelessWidget {
   }
 }
 
+String _messageCountLabel(AppState state) {
+  final visible = state.visibleMessages.length;
+  final matching = state.matchingMessages.length;
+  if (visible == matching) {
+    return '$visible';
+  }
+  return '$visible/$matching';
+}

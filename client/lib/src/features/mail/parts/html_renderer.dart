@@ -17,8 +17,6 @@ String _sanitizeMailHtml(String html) {
           r'<\s*(script|style|meta|link|iframe|object|embed|form)\b[^>]*/?\s*>',
           caseSensitive: false),
       '');
-  value =
-      value.replaceAll(RegExp(r'<\s*img\b[^>]*>', caseSensitive: false), '');
   value = value.replaceAll(
       RegExp(r"\son[a-z]+\s*=\s*([" "']).*?\1",
           caseSensitive: false, dotAll: true),
@@ -55,18 +53,26 @@ List<Widget> _htmlNodeToWidgets(
     return const [];
   }
   final tag = node.localName?.toLowerCase() ?? '';
+  final effectiveStyle = _styleFromHtml(node, style);
   final align = _htmlAlignment(node);
   final children = () => [
         for (final child in node.nodes)
-          ..._htmlNodeToWidgets(context, child, style),
+          ..._htmlNodeToWidgets(context, child, effectiveStyle),
       ];
   switch (tag) {
     case 'br':
       return const [SizedBox(height: 8)];
+    case 'hr':
+      return [
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 18),
+          child: Divider(color: scheme.outlineVariant),
+        ),
+      ];
     case 'img':
-      return const [];
+      return _htmlImageToWidgets(context, node, effectiveStyle);
     case 'a':
-      final spans = _htmlInlineSpans(context, node.nodes, style);
+      final spans = _htmlInlineSpans(context, node.nodes, effectiveStyle);
       if (_isBlankSpans(spans)) {
         return const [];
       }
@@ -76,7 +82,7 @@ List<Widget> _htmlNodeToWidgets(
           child: Align(
             alignment: align,
             child: SelectableText.rich(
-              TextSpan(style: style, children: spans),
+              TextSpan(style: effectiveStyle, children: spans),
               textAlign: _htmlTextAlign(node),
             ),
           ),
@@ -93,7 +99,7 @@ List<Widget> _htmlNodeToWidgets(
             alignment: align,
             child: SelectableText.rich(
               TextSpan(
-                style: style.copyWith(
+                style: effectiveStyle.copyWith(
                   fontSize: switch (tag) {
                     'h1' => 26,
                     'h2' => 22,
@@ -103,11 +109,41 @@ List<Widget> _htmlNodeToWidgets(
                   fontWeight: FontWeight.w700,
                   color: scheme.onSurface,
                 ),
-                children: _htmlInlineSpans(context, node.nodes, style),
+                children: _htmlInlineSpans(context, node.nodes, effectiveStyle),
               ),
             ),
           ),
         ),
+      ];
+    case 'pre':
+      final text = _readablePreText(node.text);
+      if (text.trim().isEmpty) {
+        return const [];
+      }
+      return [
+        _HtmlPreBlock(
+          text: text,
+          style: effectiveStyle,
+        ),
+      ];
+    case 'blockquote':
+      final quoteChildren = _hasBlockChildren(node)
+          ? children()
+          : [
+              SelectableText.rich(
+                TextSpan(
+                  style: effectiveStyle,
+                  children:
+                      _htmlInlineSpans(context, node.nodes, effectiveStyle),
+                ),
+                textAlign: _htmlTextAlign(node),
+              ),
+            ];
+      if (quoteChildren.isEmpty) {
+        return const [];
+      }
+      return [
+        _HtmlQuoteBlock(children: quoteChildren),
       ];
     case 'p':
     case 'div':
@@ -116,7 +152,6 @@ List<Widget> _htmlNodeToWidgets(
     case 'main':
     case 'header':
     case 'footer':
-    case 'blockquote':
       if (_hasBlockChildren(node)) {
         return [
           Padding(
@@ -128,7 +163,7 @@ List<Widget> _htmlNodeToWidgets(
           ),
         ];
       }
-      final spans = _htmlInlineSpans(context, node.nodes, style);
+      final spans = _htmlInlineSpans(context, node.nodes, effectiveStyle);
       if (_isBlankSpans(spans)) {
         return const [];
       }
@@ -138,7 +173,7 @@ List<Widget> _htmlNodeToWidgets(
           child: Align(
             alignment: align,
             child: SelectableText.rich(
-              TextSpan(style: style, children: spans),
+              TextSpan(style: effectiveStyle, children: spans),
               textAlign: _htmlTextAlign(node),
             ),
           ),
@@ -156,19 +191,19 @@ List<Widget> _htmlNodeToWidgets(
                 _HtmlListItem(
                   marker: tag == 'ol' ? '${index + 1}.' : '-',
                   element: node.children[index],
-                  style: style,
+                  style: effectiveStyle,
                 ),
             ],
           ),
         ),
       ];
     case 'table':
-      return _htmlTableToWidgets(context, node, style);
+      return _htmlTableToWidgets(context, node, effectiveStyle);
     case 'tr':
-      return _htmlTableRowToWidgets(context, node, style);
+      return _htmlTableRowToWidgets(context, node, effectiveStyle);
     case 'td':
     case 'th':
-      return _htmlTableCellToWidgets(context, node, style);
+      return _htmlTableCellToWidgets(context, node, effectiveStyle);
     case 'tbody':
     case 'thead':
     case 'tfoot':
@@ -184,14 +219,15 @@ List<Widget> _htmlNodeToWidgets(
       if (_hasBlockChildren(node)) {
         return children();
       }
-      final spans = _htmlInlineSpans(context, node.nodes, style);
+      final spans = _htmlInlineSpans(context, node.nodes, effectiveStyle);
       if (_isBlankSpans(spans)) {
         return const [];
       }
       return [
         Padding(
           padding: const EdgeInsets.only(bottom: 10),
-          child: SelectableText.rich(TextSpan(style: style, children: spans)),
+          child: SelectableText.rich(
+              TextSpan(style: effectiveStyle, children: spans)),
         ),
       ];
   }
@@ -334,6 +370,113 @@ List<Widget> _htmlTableCellToWidgets(
     for (final child in cell.nodes)
       ..._htmlNodeToWidgets(context, child, style),
   ];
+}
+
+List<Widget> _htmlImageToWidgets(
+  BuildContext context,
+  dom.Element image,
+  TextStyle style,
+) {
+  if (_isLikelyTrackingImage(image)) {
+    return const [];
+  }
+  final scheme = Theme.of(context).colorScheme;
+  final label = _htmlImageLabel(image);
+  return [
+    Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: scheme.surfaceContainerHighest.withOpacity(0.52),
+          borderRadius: BorderRadius.circular(_MailDimens.radius),
+          border: Border.all(color: scheme.outlineVariant),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(
+                Icons.image_not_supported_outlined,
+                size: 20,
+                color: scheme.onSurfaceVariant,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  label.isEmpty ? '远程图片已阻止' : '远程图片已阻止：$label',
+                  style: style.copyWith(color: scheme.onSurfaceVariant),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+  ];
+}
+
+class _HtmlPreBlock extends StatelessWidget {
+  const _HtmlPreBlock({required this.text, required this.style});
+
+  final String text;
+  final TextStyle style;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: scheme.surfaceContainerHighest.withOpacity(0.42),
+          borderRadius: BorderRadius.circular(_MailDimens.radius),
+          border: Border.all(color: scheme.outlineVariant),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: SelectableText(
+            _softWrapLongRuns(text),
+            style: style.copyWith(
+              fontFamily: 'monospace',
+              height: 1.45,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _HtmlQuoteBlock extends StatelessWidget {
+  const _HtmlQuoteBlock({required this.children});
+
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          border: Border(
+            left: BorderSide(color: scheme.outlineVariant, width: 3),
+          ),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.only(left: 12),
+          child: DefaultTextStyle.merge(
+            style: TextStyle(color: scheme.onSurfaceVariant),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: children,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _HtmlListItem extends StatelessWidget {
@@ -636,7 +779,7 @@ double? _htmlCssLength(String? value) {
     return null;
   }
   final match =
-      RegExp(r'^\s*([0-9]+(?:\.[0-9]+)?)(?:px)?\s*$', caseSensitive: false)
+      RegExp(r'^\s*([0-9]+(?:\.[0-9]+)?)(?:px)?\b', caseSensitive: false)
           .firstMatch(value);
   if (match == null) {
     return null;
@@ -811,6 +954,19 @@ String _readableTextNode(String value, {bool trim = true}) {
   return trim ? text : collapsed;
 }
 
+String _readablePreText(String value) {
+  final normalized = value
+      .replaceAll('\r\n', '\n')
+      .replaceAll('\r', '\n')
+      .replaceAll('\t', '  ')
+      .replaceAll(RegExp(r'\n{4,}'), '\n\n\n')
+      .trimRight();
+  if (normalized.trim().isEmpty) {
+    return '';
+  }
+  return normalized;
+}
+
 bool _looksLikeUrl(String value) {
   return RegExp(r'^https?://', caseSensitive: false).hasMatch(value.trim());
 }
@@ -842,6 +998,58 @@ String _urlHost(String value) {
     return '';
   }
   return host.replaceFirst(RegExp(r'^www\.'), '');
+}
+
+String _htmlImageLabel(dom.Element image) {
+  final label = [
+    image.attributes['alt'],
+    image.attributes['title'],
+  ]
+      .whereType<String>()
+      .map((value) => _readableTextNode(value))
+      .where((value) => value.isNotEmpty)
+      .firstOrNull;
+  if (label != null && !_looksLikeUrl(label)) {
+    return label;
+  }
+  return '';
+}
+
+bool _isLikelyTrackingImage(dom.Element image) {
+  final width = _htmlImageDimension(image, 'width');
+  final height = _htmlImageDimension(image, 'height');
+  if (width != null && height != null && width <= 2 && height <= 2) {
+    return true;
+  }
+  final descriptor = [
+    image.attributes['src'],
+    image.attributes['alt'],
+    image.attributes['title'],
+    image.attributes['class'],
+    image.attributes['id'],
+  ].whereType<String>().join(' ').toLowerCase();
+  return descriptor.contains('tracking') ||
+      descriptor.contains('tracker') ||
+      descriptor.contains('beacon') ||
+      descriptor.contains('pixel');
+}
+
+double? _htmlImageDimension(dom.Element image, String property) {
+  return _htmlCssLength(image.attributes[property]) ??
+      _htmlCssLength(_styleDeclaration(image, property));
+}
+
+int _blockedImageCount(dom.Node node) {
+  if (node is! dom.Element || _isHiddenHtml(node)) {
+    return 0;
+  }
+  if (node.localName?.toLowerCase() == 'img') {
+    return _isLikelyTrackingImage(node) ? 0 : 1;
+  }
+  return node.nodes.fold<int>(
+    0,
+    (count, child) => count + _blockedImageCount(child),
+  );
 }
 
 String _selectedFolderTitle(AppState state) {

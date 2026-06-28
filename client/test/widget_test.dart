@@ -52,8 +52,7 @@ void main() {
     expect(find.text('密送 Bcc'), findsOneWidget);
   });
 
-  testWidgets('does not expose unsupported attachment actions',
-      (tester) async {
+  testWidgets('does not expose unsupported attachment actions', (tester) async {
     await _setSurface(tester, const Size(1280, 800));
     final state = _mailState();
 
@@ -114,6 +113,36 @@ void main() {
       find.textContaining('click.redditmail.com', findRichText: true),
       findsNothing,
     );
+  });
+
+  testWidgets('renders quote, preformatted text, and blocked image notice',
+      (tester) async {
+    await _setSurface(tester, const Size(1280, 800));
+    final state = _mailState(
+      bodyHtml: '''
+<p>下面是日志和引用。</p>
+<blockquote><p>上一封邮件里的重点。</p></blockquote>
+<pre>first line
+  indented value</pre>
+<hr>
+<img src="https://example.com/chart.png" alt="Product chart">
+<img width="1" height="1" src="https://example.com/pixel.png" alt="tracking pixel">
+''',
+    );
+
+    await tester.pumpWidget(EmailApp(state: state));
+
+    expect(find.text('已阻止 1 张远程图片'), findsOneWidget);
+    expect(find.textContaining('Product chart'), findsOneWidget);
+    expect(
+      find.textContaining('上一封邮件里的重点', findRichText: true),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('first line', findRichText: true),
+      findsOneWidget,
+    );
+    expect(find.textContaining('tracking pixel'), findsNothing);
   });
 
   testWidgets('keeps presentation table cells on the same row', (tester) async {

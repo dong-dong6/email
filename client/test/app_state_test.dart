@@ -53,13 +53,85 @@ void main() {
     expect(state.selectedMessageId, 'msg_work');
     expect(state.selectedMessage?.id, 'msg_work');
   });
+
+  test('syncSelectedAccount waits until backend sync settles', () async {
+    final oldSnapshot = _snapshot(workStatus: 'syncing', workSubject: 'Old');
+    final newSnapshot = _snapshot(workStatus: 'active', workSubject: 'New');
+    final api = _RecordingApiClient(oldSnapshot)
+      ..queuedSnapshots = [oldSnapshot, newSnapshot];
+    final state = AppState(
+      api,
+      syncPollAttempts: 3,
+      syncPollDelay: Duration.zero,
+    )
+      ..isAuthenticated = true
+      ..snapshot = oldSnapshot
+      ..selectedFolderId = 'fld_work_inbox'
+      ..selectedMessageId = 'msg_work';
+
+    await state.syncSelectedAccount();
+
+    expect(api.syncedAccountId, 'acc_work');
+    expect(state.error, isNull);
+    expect(state.selectedMessage?.subject, 'New');
+    expect(state.selectedAccount?.status, 'active');
+  });
+
+  test('message filter narrows visible messages without changing folder scope',
+      () {
+    final snapshot = _snapshot(workIsStarred: true);
+    final state = AppState(_RecordingApiClient(snapshot))
+      ..isAuthenticated = true
+      ..snapshot = snapshot
+      ..selectedFolderId = 'fld_work_inbox';
+
+    state.setMessageFilter(MailMessageFilter.starred);
+
+    expect(state.visibleMessages.map((message) => message.id), ['msg_work']);
+    expect(state.matchingMessages.map((message) => message.id), ['msg_work']);
+    expect(state.matchingStarredCount, 1);
+
+    state.setMessageFilter(MailMessageFilter.unread);
+
+    expect(state.visibleMessages.map((message) => message.id), ['msg_work']);
+    expect(state.matchingUnreadCount, 1);
+  });
+
+  test('markSelectedRead patches backend and updates local folder counts',
+      () async {
+    final snapshot = _snapshot();
+    final api = _RecordingApiClient(snapshot);
+    final state = AppState(api)
+      ..isAuthenticated = true
+      ..snapshot = snapshot
+      ..selectedFolderId = 'fld_work_inbox'
+      ..selectedMessageId = 'msg_work';
+
+    state.toggleMessageSelection('msg_work');
+    await state.markSelectedRead(true);
+
+    final message =
+        state.messages.where((message) => message.id == 'msg_work').single;
+    final folder =
+        state.folders.where((folder) => folder.id == 'fld_work_inbox').single;
+
+    expect(api.patchedRead, {'msg_work': true});
+    expect(message.isRead, isTrue);
+    expect(folder.unreadCount, 0);
+    expect(state.selectedMessageIds, isEmpty);
+    expect(state.error, isNull);
+  });
 }
 
 class _RecordingApiClient extends ApiClient {
   _RecordingApiClient(this.snapshotData) : super('http://localhost:8080');
 
   final MailboxSnapshot snapshotData;
+  List<MailboxSnapshot> queuedSnapshots = [];
   String? sentAccountId;
+  String? syncedAccountId;
+  final Map<String, bool> patchedRead = {};
+  final Map<String, bool> patchedStarred = {};
 
   @override
   Future<void> send({
@@ -74,21 +146,46 @@ class _RecordingApiClient extends ApiClient {
   }
 
   @override
-  Future<MailboxSnapshot> snapshot() async => snapshotData;
+  Future<MailboxSnapshot> snapshot() async {
+    if (queuedSnapshots.isNotEmpty) {
+      return queuedSnapshots.removeAt(0);
+    }
+    return snapshotData;
+  }
+
+  @override
+  Future<void> syncAccount(String accountId) async {
+    syncedAccountId = accountId;
+  }
+
+  @override
+  Future<void> patchMessage(String id, {bool? isRead, bool? isStarred}) async {
+    if (isRead != null) {
+      patchedRead[id] = isRead;
+    }
+    if (isStarred != null) {
+      patchedStarred[id] = isStarred;
+    }
+  }
 }
 
-MailboxSnapshot _snapshot() {
+MailboxSnapshot _snapshot({
+  String workStatus = 'active',
+  String workSubject = 'Work',
+  bool workIsRead = false,
+  bool workIsStarred = false,
+}) {
   final now = DateTime(2026, 6, 17, 9, 30);
   return MailboxSnapshot(
-    accounts: const [
+    accounts: [
       MailAccount(
         id: 'acc_work',
         provider: 'imap',
         email: 'work@example.com',
         displayName: '工作邮箱',
-        status: 'active',
+        status: workStatus,
       ),
-      MailAccount(
+      const MailAccount(
         id: 'acc_personal',
         provider: 'imap',
         email: 'me@example.com',
@@ -124,12 +221,12 @@ MailboxSnapshot _snapshot() {
         to: const [Address(email: 'work@example.com')],
         cc: const [],
         bcc: const [],
-        subject: 'Work',
+        subject: workSubject,
         snippet: 'Work message',
         bodyText: 'Work body',
         bodyHtml: '',
-        isRead: false,
-        isStarred: false,
+        isRead: workIsRead,
+        isStarred: workIsStarred,
         labels: const ['inbox'],
         attachments: const [],
         receivedAt: now,

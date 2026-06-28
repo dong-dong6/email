@@ -48,14 +48,14 @@ func (w *OutboxWorker) drain(ctx context.Context) {
 		}
 		if _, err := connector.Send(ctx, account, item.Payload); err != nil {
 			status := "retry"
-			if item.Attempts >= 3 {
+			if item.Attempts+1 >= 3 {
 				status = "failed"
 			}
-			w.db.MarkOutbox(item.ID, status, err.Error())
-			w.broker.Publish(model.Event{Type: "outbox.failed", AccountID: account.ID, Payload: item})
+			updated, _ := w.db.MarkOutbox(item.ID, status, err.Error())
+			w.broker.Publish(model.Event{Type: "outbox.failed", AccountID: account.ID, Payload: updated})
 			continue
 		}
-		w.db.MarkOutbox(item.ID, "sent", "")
-		w.broker.Publish(model.Event{Type: "outbox.sent", AccountID: account.ID, Payload: item})
+		updated, _ := w.db.MarkOutbox(item.ID, "sent", "")
+		w.broker.Publish(model.Event{Type: "outbox.sent", AccountID: account.ID, Payload: updated})
 	}
 }

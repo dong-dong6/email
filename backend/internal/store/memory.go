@@ -358,18 +358,19 @@ func (m *Memory) PendingOutbox(limit int) []model.OutboxItem {
 	return out
 }
 
-func (m *Memory) MarkOutbox(id, status, lastError string) {
+func (m *Memory) MarkOutbox(id, status, lastError string) (model.OutboxItem, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	item, ok := m.outbox[id]
 	if !ok {
-		return
+		return model.OutboxItem{}, false
 	}
 	item.Status = status
 	item.LastError = lastError
 	item.Attempts++
 	item.UpdatedAt = time.Now()
 	m.outbox[id] = item
+	return item, true
 }
 
 func (m *Memory) ListRules() []model.Rule {

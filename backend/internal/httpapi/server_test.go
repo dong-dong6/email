@@ -2,8 +2,10 @@ package httpapi
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
+	"email/backend/internal/events"
 	"email/backend/internal/model"
 )
 
@@ -81,6 +83,33 @@ func TestLoggingResponseWriterPreservesFlusher(t *testing.T) {
 	flusher.Flush()
 	if !base.flushed {
 		t.Fatal("underlying flusher was not called")
+	}
+}
+
+func TestOAuthCallbackRejectsProviderMismatch(t *testing.T) {
+	server := &Server{
+		broker:        events.NewBroker(),
+		oauthSessions: map[string]oauthSession{},
+	}
+	server.saveOAuthSession("state-1", model.ProviderGmail, "http://example.test/api/v1/oauth/gmail/callback")
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/oauth/outlook/callback?state=state-1&code=abc", nil)
+	rec := httptest.NewRecorder()
+
+	server.oauthCallback("outlook")(rec, req)
+
+	session, ok := server.getOAuthSession("state-1")
+	if !ok {
+		t.Fatal("expected oauth session to remain available")
+	}
+	if session.Status != "error" {
+		t.Fatalf("expected error status, got %q", session.Status)
+	}
+	if session.Provider != string(model.ProviderGmail) {
+		t.Fatalf("session provider was overwritten: %#v", session)
+	}
+	if session.AccountID != "" {
+		t.Fatalf("mismatched callback should not complete an account: %#v", session)
 	}
 }
 

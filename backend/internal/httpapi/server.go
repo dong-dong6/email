@@ -345,9 +345,17 @@ func (s *Server) oauthStatus(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) oauthCallback(provider string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		callbackProvider := model.Provider(provider)
 		state := strings.TrimSpace(r.URL.Query().Get("state"))
 		if state == "" {
 			writeError(w, http.StatusBadRequest, errors.New("missing oauth state"))
+			return
+		}
+		session, ok := s.getOAuthSession(state)
+		if ok && !oauthSessionMatchesProvider(session, callbackProvider) {
+			session = s.markOAuthSession(state, callbackProvider, "error", "OAuth state provider mismatch")
+			s.publishOAuthEvent("oauth.failed", session)
+			writeOAuthHTML(w, "授权流程不匹配", provider+" OAuth 回调无法完成这次授权。", "请回到客户端重新生成授权链接。")
 			return
 		}
 		if errorCode := strings.TrimSpace(r.URL.Query().Get("error")); errorCode != "" {
@@ -355,7 +363,7 @@ func (s *Server) oauthCallback(provider string) http.HandlerFunc {
 			if errorDescription == "" {
 				errorDescription = errorCode
 			}
-			session := s.markOAuthSession(state, model.Provider(provider), "error", errorDescription)
+			session := s.markOAuthSession(state, callbackProvider, "error", errorDescription)
 			s.publishOAuthEvent("oauth.failed", session)
 			writeOAuthHTML(w, "授权失败", provider+" OAuth 返回错误："+errorDescription, "请回到客户端重新生成授权链接。")
 			return
@@ -365,18 +373,17 @@ func (s *Server) oauthCallback(provider string) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, errors.New("missing oauth code"))
 			return
 		}
-		session, ok := s.getOAuthSession(state)
 		if !ok {
-			session = s.markOAuthSession(state, model.Provider(provider), "error", "授权状态已失效，请回到客户端重新生成授权链接")
+			session = s.markOAuthSession(state, callbackProvider, "error", "授权状态已失效，请回到客户端重新生成授权链接")
 			s.publishOAuthEvent("oauth.failed", session)
 			writeOAuthHTML(w, "授权状态已失效", "后端找不到这次 OAuth state。", "请回到客户端重新生成授权链接。")
 			return
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
 		defer cancel()
-		account, err := s.completeOAuth(ctx, model.Provider(provider), code, session.RedirectURI)
+		account, err := s.completeOAuth(ctx, callbackProvider, code, session.RedirectURI)
 		if err != nil {
-			session = s.markOAuthSession(state, model.Provider(provider), "error", err.Error())
+			session = s.markOAuthSession(state, callbackProvider, "error", err.Error())
 			s.publishOAuthEvent("oauth.failed", session)
 			writeOAuthHTML(w, "授权绑定失败", err.Error(), "请回到客户端检查 Client ID / Secret 和回调地址后重新生成授权链接。")
 			return
@@ -386,6 +393,10 @@ func (s *Server) oauthCallback(provider string) http.HandlerFunc {
 		s.publishOAuthEvent("oauth.completed", session)
 		writeOAuthHTML(w, "邮箱绑定完成", account.Email+" 已成功绑定到后端。", "客户端会自动刷新账号列表，现在可以关闭这个页面。")
 	}
+}
+
+func oauthSessionMatchesProvider(session oauthSession, provider model.Provider) bool {
+	return strings.EqualFold(strings.TrimSpace(session.Provider), string(provider))
 }
 
 func (s *Server) saveOAuthSession(state string, provider model.Provider, redirectURI string) {

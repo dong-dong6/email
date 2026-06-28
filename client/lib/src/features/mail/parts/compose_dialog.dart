@@ -210,21 +210,6 @@ class _ComposeDialogState extends State<_ComposeDialog> {
                       labelText: '正文',
                     ),
                   ),
-                  const SizedBox(height: 12),
-                  const Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      InputChip(
-                        avatar: Icon(Icons.attach_file_rounded),
-                        label: Text('附件'),
-                      ),
-                      InputChip(
-                        avatar: Icon(Icons.image_outlined),
-                        label: Text('内联图片'),
-                      ),
-                    ],
-                  ),
                   ListenableBuilder(
                     listenable: widget.state,
                     builder: (context, _) {

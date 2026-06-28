@@ -40,6 +40,22 @@ void main() {
     expect(find.text('密送 Bcc'), findsOneWidget);
   });
 
+  testWidgets('does not expose unsupported attachment actions',
+      (tester) async {
+    await _setSurface(tester, const Size(1280, 800));
+    final state = _mailState();
+
+    await tester.pumpWidget(EmailApp(state: state));
+    expect(find.text('brief.pdf'), findsOneWidget);
+    expect(find.byType(ActionChip), findsNothing);
+
+    await tester.tap(find.text('写信').first);
+    await tester.pumpAndSettle();
+
+    expect(find.byType(InputChip), findsNothing);
+    expect(find.text('内联图片'), findsNothing);
+  });
+
   testWidgets('renders html mail without image and tracking noise',
       (tester) async {
     await _setSurface(tester, const Size(1280, 800));

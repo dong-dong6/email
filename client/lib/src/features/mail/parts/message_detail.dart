@@ -265,14 +265,13 @@ class _AttachmentChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return ActionChip(
+    return Chip(
       avatar: Icon(
         Icons.attach_file_rounded,
         color: scheme.primary,
         size: 18,
       ),
       label: Text(attachment.fileName, overflow: TextOverflow.ellipsis),
-      onPressed: () {},
     );
   }
 }

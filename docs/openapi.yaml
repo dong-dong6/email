@@ -26,6 +26,20 @@ paths:
       responses:
         "200":
           description: Token pair
+  /auth/register:
+    post:
+      security: []
+      summary: Register the initial owner account
+      responses:
+        "201":
+          description: User record
+  /auth/check:
+    get:
+      security: []
+      summary: Check whether any owner user exists
+      responses:
+        "200":
+          description: has_users flag
   /snapshot:
     get:
       summary: Initial mailbox bootstrap for clients
@@ -43,6 +57,43 @@ paths:
       responses:
         "201":
           description: Account
+  /accounts/oauth/start:
+    get:
+      summary: Start official Gmail or Outlook OAuth binding
+      responses:
+        "200":
+          description: OAuth state and provider authorization URL
+  /accounts/oauth/status:
+    get:
+      summary: Read OAuth binding status by state
+      responses:
+        "200":
+          description: OAuth session status
+  /oauth/gmail/callback:
+    get:
+      security: []
+      summary: Gmail OAuth callback
+      responses:
+        "200":
+          description: Browser-readable OAuth result page
+  /oauth/outlook/callback:
+    get:
+      security: []
+      summary: Outlook OAuth callback
+      responses:
+        "200":
+          description: Browser-readable OAuth result page
+  /accounts/{id}:
+    get:
+      summary: Get account
+      responses:
+        "200":
+          description: Account
+    delete:
+      summary: Delete account and owned mailbox state
+      responses:
+        "204":
+          description: Deleted
   /accounts/{id}/sync:
     post:
       summary: Trigger provider sync
@@ -94,6 +145,23 @@ paths:
       responses:
         "201":
           description: Draft
+  /drafts/{id}:
+    put:
+      summary: Replace draft
+      responses:
+        "200":
+          description: Draft
+    delete:
+      summary: Delete draft
+      responses:
+        "204":
+          description: Deleted
+  /attachments/{id}:
+    get:
+      summary: Download attachment
+      responses:
+        "200":
+          description: Attachment bytes
   /send:
     post:
       summary: Queue outgoing message
@@ -117,6 +185,12 @@ paths:
       responses:
         "201":
           description: Rule
+  /rules/{id}:
+    delete:
+      summary: Delete rule
+      responses:
+        "204":
+          description: Deleted
   /settings:
     get:
       summary: Read settings
@@ -135,3 +209,17 @@ paths:
       responses:
         "200":
           description: text/event-stream
+  /webhooks/gmail:
+    post:
+      security: []
+      summary: Accept Gmail provider webhook notification
+      responses:
+        "202":
+          description: Accepted
+  /webhooks/outlook:
+    post:
+      security: []
+      summary: Accept Outlook provider webhook notification
+      responses:
+        "202":
+          description: Accepted

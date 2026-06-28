@@ -56,6 +56,29 @@ void main() {
     expect(find.text('内联图片'), findsNothing);
   });
 
+  testWidgets('clears search field and query together', (tester) async {
+    await _setSurface(tester, const Size(1280, 800));
+    final state = _mailState();
+
+    await tester.pumpWidget(EmailApp(state: state));
+    await tester.enterText(find.byType(SearchBar), 'Alice');
+    await tester.pumpAndSettle();
+
+    expect(state.query, 'Alice');
+
+    await tester.tap(find.byTooltip('清除'));
+    await tester.pumpAndSettle();
+
+    final editable = tester.widget<EditableText>(
+      find.descendant(
+        of: find.byType(SearchBar),
+        matching: find.byType(EditableText),
+      ),
+    );
+    expect(state.query, '');
+    expect(editable.controller.text, '');
+  });
+
   testWidgets('renders html mail without image and tracking noise',
       (tester) async {
     await _setSurface(tester, const Size(1280, 800));

@@ -1,6 +1,6 @@
 part of '../mail_home_screen.dart';
 
-class _MessageList extends StatelessWidget {
+class _MessageList extends StatefulWidget {
   const _MessageList(
       {required this.state, required this.compact, this.onOpenMessage});
 
@@ -9,16 +9,46 @@ class _MessageList extends StatelessWidget {
   final VoidCallback? onOpenMessage;
 
   @override
+  State<_MessageList> createState() => _MessageListState();
+}
+
+class _MessageListState extends State<_MessageList> {
+  late final TextEditingController _searchController;
+
+  @override
+  void initState() {
+    super.initState();
+    _searchController = TextEditingController(text: widget.state.query);
+  }
+
+  @override
+  void didUpdateWidget(covariant _MessageList oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (_searchController.text != widget.state.query) {
+      _searchController.text = widget.state.query;
+      _searchController.selection = TextSelection.collapsed(
+        offset: _searchController.text.length,
+      );
+    }
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final messages = state.visibleMessages;
+    final messages = widget.state.visibleMessages;
     return Column(
       children: [
         Padding(
           padding: EdgeInsets.fromLTRB(
-            compact ? 12 : 16,
+            widget.compact ? 12 : 16,
             14,
-            compact ? 12 : 16,
+            widget.compact ? 12 : 16,
             10,
           ),
           child: Column(
@@ -28,7 +58,7 @@ class _MessageList extends StatelessWidget {
                 children: [
                   Expanded(
                     child: Text(
-                      _selectedFolderTitle(state),
+                      _selectedFolderTitle(widget.state),
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context)
                           .textTheme
@@ -55,14 +85,18 @@ class _MessageList extends StatelessWidget {
               ),
               const SizedBox(height: 10),
               SearchBar(
+                controller: _searchController,
                 leading: const Icon(Icons.search_rounded),
                 hintText: '搜索邮件',
-                onChanged: state.setQuery,
+                onChanged: widget.state.setQuery,
                 trailing: [
-                  if (state.query.isNotEmpty)
+                  if (widget.state.query.isNotEmpty)
                     IconButton(
                       tooltip: '清除',
-                      onPressed: () => state.setQuery(''),
+                      onPressed: () {
+                        _searchController.clear();
+                        widget.state.setQuery('');
+                      },
                       icon: const Icon(Icons.close_rounded),
                     ),
                 ],
@@ -70,22 +104,22 @@ class _MessageList extends StatelessWidget {
             ],
           ),
         ),
-        if (state.error != null)
+        if (widget.state.error != null)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-            child: _InlineError(text: state.error!),
+            child: _InlineError(text: widget.state.error!),
           ),
         Expanded(
           child: messages.isEmpty
               ? _EmptyState(
-                  icon: state.isLoading
+                  icon: widget.state.isLoading
                       ? Icons.sync_rounded
-                      : state.query.trim().isEmpty
+                      : widget.state.query.trim().isEmpty
                           ? Icons.inbox_rounded
                           : Icons.search_off_rounded,
-                  text: state.isLoading
+                  text: widget.state.isLoading
                       ? '正在同步邮件'
-                      : state.query.trim().isEmpty
+                      : widget.state.query.trim().isEmpty
                           ? '这个文件夹还没有邮件'
                           : '没有匹配的邮件',
                 )
@@ -97,13 +131,13 @@ class _MessageList extends StatelessWidget {
                     final message = messages[index];
                     return _MessageTile(
                       message: message,
-                      selected: state.selectedMessage?.id == message.id,
-                      compact: compact,
+                      selected: widget.state.selectedMessage?.id == message.id,
+                      compact: widget.compact,
                       onTap: () {
-                        state.selectMessage(message.id);
-                        onOpenMessage?.call();
+                        widget.state.selectMessage(message.id);
+                        widget.onOpenMessage?.call();
                       },
-                      onStar: () => state.toggleStar(message),
+                      onStar: () => widget.state.toggleStar(message),
                     );
                   },
                 ),

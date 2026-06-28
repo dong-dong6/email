@@ -104,7 +104,7 @@ func (s *Service) Refresh(refreshToken string) (TokenPair, error) {
 	}
 	delete(s.refresh, claims.ID)
 	s.mu.Unlock()
-	return s.issuePair()
+	return s.issuePairForUser(claims.Email, claims.Subject)
 }
 
 func (s *Service) Verify(token, tokenType string) (Claims, error) {

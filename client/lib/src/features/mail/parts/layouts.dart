@@ -102,8 +102,7 @@ class _MobileTopBar extends StatelessWidget {
               for (final folder in state.folders)
                 PopupMenuItem(
                   value: folder.id,
-                  child: Text(
-                      '${_folderDisplayName(folder)}  ${folder.unreadCount > 0 ? folder.unreadCount : ''}'),
+                  child: Text(_mobileFolderMenuLabel(state, folder)),
                 ),
             ],
           ),
@@ -134,3 +133,18 @@ class _MobileTopBar extends StatelessWidget {
   }
 }
 
+String _mobileFolderMenuLabel(AppState state, MailFolder folder) {
+  final unread = folder.unreadCount > 0 ? ' ${folder.unreadCount}' : '';
+  final folderName = _folderDisplayName(folder);
+  if (state.accounts.length <= 1) {
+    return '$folderName$unread';
+  }
+  final account = state.accounts
+      .where((account) => account.id == folder.accountId)
+      .firstOrNull;
+  final accountName = account?.displayName ?? account?.email ?? '';
+  if (accountName.isEmpty) {
+    return '$folderName$unread';
+  }
+  return '$accountName / $folderName$unread';
+}

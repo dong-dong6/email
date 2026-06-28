@@ -26,6 +26,18 @@ void main() {
     expect(find.text('写信'), findsOneWidget);
   });
 
+  testWidgets('labels mobile folders with account names', (tester) async {
+    await _setSurface(tester, const Size(390, 800));
+    final state = _mailState(includeSecondAccount: true);
+
+    await tester.pumpWidget(EmailApp(state: state));
+    await tester.tap(find.byTooltip('文件夹'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('工作邮箱 / 收件箱 1'), findsOneWidget);
+    expect(find.text('个人邮箱 / 收件箱'), findsOneWidget);
+  });
+
   testWidgets('compose exposes cc and bcc fields', (tester) async {
     await _setSurface(tester, const Size(1280, 800));
     final state = _mailState();
@@ -138,24 +150,36 @@ Future<void> _setSurface(WidgetTester tester, Size size) async {
   });
 }
 
-AppState _mailState({String bodyHtml = '', String bodyText = '请看新的工作台布局。'}) {
+AppState _mailState({
+  String bodyHtml = '',
+  String bodyText = '请看新的工作台布局。',
+  bool includeSecondAccount = false,
+}) {
   final now = DateTime(2026, 6, 17, 9, 30);
   final state = AppState(ApiClient('http://localhost:8080'))
     ..isAuthenticated = true
     ..selectedFolderId = 'fld_inbox'
     ..selectedMessageId = 'msg_1'
     ..snapshot = MailboxSnapshot(
-      accounts: const [
-        MailAccount(
+      accounts: [
+        const MailAccount(
           id: 'acc_1',
           provider: 'imap',
           email: 'me@example.com',
           displayName: '工作邮箱',
           status: 'active',
         ),
+        if (includeSecondAccount)
+          const MailAccount(
+            id: 'acc_2',
+            provider: 'imap',
+            email: 'home@example.com',
+            displayName: '个人邮箱',
+            status: 'active',
+          ),
       ],
-      folders: const [
-        MailFolder(
+      folders: [
+        const MailFolder(
           id: 'fld_inbox',
           accountId: 'acc_1',
           name: 'INBOX',
@@ -163,7 +187,7 @@ AppState _mailState({String bodyHtml = '', String bodyText = '请看新的工作
           unreadCount: 1,
           totalCount: 1,
         ),
-        MailFolder(
+        const MailFolder(
           id: 'fld_sent',
           accountId: 'acc_1',
           name: 'Sent',
@@ -171,6 +195,15 @@ AppState _mailState({String bodyHtml = '', String bodyText = '请看新的工作
           unreadCount: 0,
           totalCount: 0,
         ),
+        if (includeSecondAccount)
+          const MailFolder(
+            id: 'fld_personal_inbox',
+            accountId: 'acc_2',
+            name: 'INBOX',
+            role: 'inbox',
+            unreadCount: 0,
+            totalCount: 0,
+          ),
       ],
       messages: [
         MailMessage(

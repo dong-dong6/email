@@ -1142,9 +1142,55 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 func (s *Server) withLogging(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		next.ServeHTTP(w, r)
-		slog.Info("request", "method", r.Method, "path", r.URL.Path, "duration_ms", time.Since(start).Milliseconds())
+		lrw := &loggingResponseWriter{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(lrw, r)
+		attrs := []any{
+			"method", r.Method,
+			"path", r.URL.Path,
+			"status", lrw.status,
+			"bytes", lrw.bytes,
+			"duration_ms", time.Since(start).Milliseconds(),
+		}
+		switch {
+		case lrw.status >= 500:
+			slog.Error("request", attrs...)
+		case lrw.status >= 400:
+			slog.Warn("request", attrs...)
+		default:
+			slog.Debug("request", attrs...)
+		}
 	})
+}
+
+type loggingResponseWriter struct {
+	http.ResponseWriter
+	status      int
+	bytes       int
+	wroteHeader bool
+}
+
+func (w *loggingResponseWriter) WriteHeader(status int) {
+	if w.wroteHeader {
+		return
+	}
+	w.wroteHeader = true
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *loggingResponseWriter) Write(data []byte) (int, error) {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
+	written, err := w.ResponseWriter.Write(data)
+	w.bytes += written
+	return written, err
+}
+
+func (w *loggingResponseWriter) Flush() {
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
 }
 
 func (s *Server) withRecover(next http.Handler) http.Handler {

@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"net/http"
 	"testing"
 
 	"email/backend/internal/model"
@@ -67,4 +68,37 @@ func TestNormalizeSendRequestRejectsInvalidRecipient(t *testing.T) {
 	if err := normalizeSendRequest(&req, account); err == nil {
 		t.Fatal("expected invalid recipient error")
 	}
+}
+
+func TestLoggingResponseWriterPreservesFlusher(t *testing.T) {
+	base := &flushResponseWriter{header: http.Header{}}
+	w := &loggingResponseWriter{ResponseWriter: base, status: http.StatusOK}
+
+	flusher, ok := any(w).(http.Flusher)
+	if !ok {
+		t.Fatal("loggingResponseWriter should expose http.Flusher")
+	}
+	flusher.Flush()
+	if !base.flushed {
+		t.Fatal("underlying flusher was not called")
+	}
+}
+
+type flushResponseWriter struct {
+	header  http.Header
+	flushed bool
+}
+
+func (w *flushResponseWriter) Header() http.Header {
+	return w.header
+}
+
+func (w *flushResponseWriter) Write(data []byte) (int, error) {
+	return len(data), nil
+}
+
+func (w *flushResponseWriter) WriteHeader(statusCode int) {}
+
+func (w *flushResponseWriter) Flush() {
+	w.flushed = true
 }

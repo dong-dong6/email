@@ -12,6 +12,7 @@ import (
 
 type Config struct {
 	Env                string
+	LogLevel           string
 	Addr               string
 	DataDir            string
 	BlobDir            string
@@ -28,6 +29,7 @@ type Config struct {
 func Load() (Config, error) {
 	cfg := Config{
 		Env:                getenv("APP_ENV", "development"),
+		LogLevel:           strings.ToLower(getenv("LOG_LEVEL", "info")),
 		Addr:               getenv("HTTP_ADDR", ":8080"),
 		DataDir:            getenv("DATA_DIR", "./data"),
 		OwnerEmail:         os.Getenv("OWNER_EMAIL"),

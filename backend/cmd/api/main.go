@@ -32,6 +32,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	setupLogger(cfg.LogLevel)
 	if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
 		return err
 	}
@@ -87,4 +88,22 @@ func run() error {
 		return nil
 	}
 	return err
+}
+
+func setupLogger(levelName string) {
+	var level slog.Level
+	switch levelName {
+	case "debug":
+		level = slog.LevelDebug
+	case "warn", "warning":
+		level = slog.LevelWarn
+	case "error":
+		level = slog.LevelError
+	default:
+		level = slog.LevelInfo
+		levelName = "info"
+	}
+	handler := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: level})
+	slog.SetDefault(slog.New(handler))
+	slog.Info("logger configured", "level", levelName)
 }
